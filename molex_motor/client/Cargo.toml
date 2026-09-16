@@ -1,0 +1,22 @@
+[package]
+name = "client"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+# Puente FFI para cuando lo necesitemos en Android
+uniffi = { version = "0.28.3", features = ["cli"] }
+
+# Asincronía
+tokio = { version = "1.38", features = ["full"] }
+async-trait = "0.1"
+
+# SSH para video y métricas
+russh = "0.44.1"
+russh-keys = "0.44.0"
+
+# Manejo de errores
+thiserror = "1.0"
