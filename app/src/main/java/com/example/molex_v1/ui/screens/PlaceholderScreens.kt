@@ -14,12 +14,7 @@ fun SshScreen() {
     }
 }
 
-@Composable
-fun MetricsScreen() {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(text = "Métricas Detalladas (Próximamente)")
-    }
-}
+// Se eliminó MetricsScreen de aquí
 
 @Composable
 fun SettingsScreen() {
@@ -28,9 +23,4 @@ fun SettingsScreen() {
     }
 }
 
-@Composable
-fun DevicesScreen() {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(text = "Dispositivos Almacenados (Próximamente)")
-    }
-}
+// Borramos DevicesScreen de aquí

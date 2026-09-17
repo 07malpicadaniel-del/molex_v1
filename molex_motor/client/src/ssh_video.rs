@@ -142,7 +142,7 @@ impl MolexVideoClient {
     pub fn get_screen_frame(&self) -> Result<String, MolexError> {
         get_rt().block_on(async {
             // Utilizamos 'grim' que es el capturador nativo de Wayland
-            let cmd = "grim -t jpeg -q 30 - | base64 -w 0";
+            let cmd = "WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 grim -t jpeg -q 30 - | base64 -w 0";
             let base64_image = self.run_command(cmd).await?;
 
             if base64_image.is_empty() {

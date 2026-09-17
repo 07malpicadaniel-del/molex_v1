@@ -18,19 +18,8 @@ class MainActivity : ComponentActivity() {
     private val viewModel: MolexViewModel by viewModels {
         object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                // TODO: En producción, estos datos deben venir de una base de datos o pantalla previa
-                val profile = ServerProfile(
-                    host = "192.168.1.100",
-                    port = 22u,
-                    username = "root",
-                    password = "password"
-                )
-                
-                val videoClient = MolexVideoClient(profile)
-                val inputClient = MolexInputClient("192.168.1.100")
-                
                 @Suppress("UNCHECKED_CAST")
-                return MolexViewModel(videoClient, inputClient) as T
+                return MolexViewModel() as T
             }
         }
     }

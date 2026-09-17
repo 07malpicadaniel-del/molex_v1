@@ -64,10 +64,21 @@ fun MainScreen(viewModel: MolexViewModel) {
             modifier = Modifier.padding(innerPadding)
         ) {
             composable(BottomNavItem.Ssh.route) { SshScreen() }
-            composable(BottomNavItem.Metrics.route) { MetricsScreen() }
+            composable(BottomNavItem.Metrics.route) { MetricsScreen(viewModel) }
             composable(BottomNavItem.Remote.route) { RemoteScreen(viewModel) }
             composable(BottomNavItem.Settings.route) { SettingsScreen() }
-            composable(BottomNavItem.Devices.route) { DevicesScreen() }
+            composable(BottomNavItem.Devices.route) { 
+                DevicesScreen(
+                    viewModel = viewModel, 
+                    onDeviceSelected = {
+                        // Navegamos forzosamente al RemoteScreen y limpiamos la pila
+                        navController.navigate(BottomNavItem.Remote.route) {
+                            popUpTo(navController.graph.startDestinationId)
+                            launchSingleTop = true
+                        }
+                    }
+                ) 
+            }
         }
     }
 }
