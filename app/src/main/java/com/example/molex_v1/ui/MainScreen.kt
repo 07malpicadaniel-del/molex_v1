@@ -63,7 +63,7 @@ fun MainScreen(viewModel: MolexViewModel) {
             startDestination = BottomNavItem.Remote.route, // Por defecto inicia en la vista del Control
             modifier = Modifier.padding(innerPadding)
         ) {
-            composable(BottomNavItem.Ssh.route) { SshScreen() }
+            composable(BottomNavItem.Ssh.route) { SshScreen(viewModel) }
             composable(BottomNavItem.Metrics.route) { MetricsScreen(viewModel) }
             composable(BottomNavItem.Remote.route) { RemoteScreen(viewModel) }
             composable(BottomNavItem.Settings.route) { SettingsScreen() }

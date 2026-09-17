@@ -63,7 +63,6 @@ fun RemoteScreen(viewModel: MolexViewModel) {
                     }
             )
         } ?: run {
-            // Estado visual de carga (con la paleta café) cuando no hay imagen
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(
@@ -71,7 +70,7 @@ fun RemoteScreen(viewModel: MolexViewModel) {
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "Conectando al entorno Wayland...",
+                        text = "Connecting to Wayland environment...",
                         color = MaterialTheme.colorScheme.onBackground
                     )
                 }

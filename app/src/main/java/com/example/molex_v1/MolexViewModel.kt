@@ -2,6 +2,7 @@ package com.example.molex_v1
 
 import android.graphics.BitmapFactory
 import android.util.Base64
+import android.util.Log
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.ViewModel
@@ -19,6 +20,13 @@ import uniffi.client.MolexVideoClient
 import uniffi.client.ServerProfile
 import uniffi.client.SystemMetrics
 
+sealed class VideoState {
+    object Idle : VideoState()
+    object Loading : VideoState()
+    data class Success(val frame: ImageBitmap) : VideoState()
+    data class Error(val message: String) : VideoState()
+}
+
 class MolexViewModel : ViewModel() {
 
     // Clientes nativos Rust. Los mantenemos nulos hasta conectarnos
@@ -29,11 +37,20 @@ class MolexViewModel : ViewModel() {
     private var videoJob: Job? = null
     private var metricsJob: Job? = null
 
+    private val _isConnected = MutableStateFlow(false)
+    val isConnected = _isConnected.asStateFlow()
+
     private val _currentFrame = MutableStateFlow<ImageBitmap?>(null)
     val currentFrame = _currentFrame.asStateFlow()
 
+    private val _videoState = MutableStateFlow<VideoState>(VideoState.Idle)
+    val videoState = _videoState.asStateFlow()
+
     private val _systemMetrics = MutableStateFlow<SystemMetrics?>(null)
     val systemMetrics = _systemMetrics.asStateFlow()
+
+    private val _terminalLogs = MutableStateFlow<List<String>>(emptyList())
+    val terminalLogs = _terminalLogs.asStateFlow()
 
     // Gestión de Dispositivos (En memoria por ahora)
     private val _savedDevices = MutableStateFlow<List<ServerProfile>>(emptyList())
@@ -50,6 +67,13 @@ class MolexViewModel : ViewModel() {
      * Si ya hay una conexión activa, la destruye limpiamente para evitar fugas de memoria.
      */
     fun connectToServer(profile: ServerProfile) {
+        val sanitizedProfile = ServerProfile(
+            host = profile.host.trim(),
+            port = profile.port,
+            username = profile.username.trim(),
+            password = profile.password?.trim()?.ifBlank { null }
+        )
+
         // Cancelar bucles activos
         videoJob?.cancel()
         metricsJob?.cancel()
@@ -57,22 +81,28 @@ class MolexViewModel : ViewModel() {
         // Liberar sockets e instancias de Rust FFI previas
         videoClient?.destroy()
         inputClient?.destroy()
+        videoClient = null
+        inputClient = null
+        _isConnected.value = false
 
         // Reiniciar estado UI
         _currentFrame.value = null
         _systemMetrics.value = null
+        _videoState.value = VideoState.Loading
 
         // Instanciar nuevos clientes
         try {
-            videoClient = MolexVideoClient(profile)
-            inputClient = MolexInputClient(profile.host)
+            videoClient = MolexVideoClient(sanitizedProfile)
+            inputClient = MolexInputClient(sanitizedProfile.host)
+            _isConnected.value = true
 
             // Arrancar bucles
             startVideoLoop()
             startMetricsLoop()
         } catch (e: Exception) {
             e.printStackTrace()
-            // TODO: Notificar a la UI el error de conexión
+            _isConnected.value = false
+            _videoState.value = VideoState.Error(e.localizedMessage ?: "Conexión perdida")
         }
     }
 
@@ -82,14 +112,27 @@ class MolexViewModel : ViewModel() {
                 try {
                     val frameData = videoClient?.getScreenFrame()
                     if (frameData != null && frameData != "SAME_FRAME") {
-                        val bytes = Base64.decode(frameData, Base64.DEFAULT)
-                        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                        bitmap?.let { 
-                            _currentFrame.value = it.asImageBitmap() 
+                        try {
+                            val bytes = Base64.decode(frameData, Base64.NO_WRAP)
+                            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            bitmap?.let { 
+                                _currentFrame.value = it.asImageBitmap() 
+                                _videoState.value = VideoState.Success(it.asImageBitmap())
+                            }
+                        } catch (e: IllegalArgumentException) {
+                            Log.e("MolexVideo", "Error de Linux: $frameData", e)
+                            _isConnected.value = false
+                            _videoState.value = VideoState.Error("Error de Linux: $frameData")
+                            break
                         }
                     }
+                    delay(150L)
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     e.printStackTrace()
+                    _isConnected.value = false
+                    _videoState.value = VideoState.Error(e.localizedMessage ?: "Conexión perdida")
+                    break
                 }
             }
         }
@@ -105,13 +148,46 @@ class MolexViewModel : ViewModel() {
                         _systemMetrics.value = SystemMetrics(
                             osInfo = rawMetrics.osInfo.stripAnsiCodes(),
                             ramUsage = rawMetrics.ramUsage.stripAnsiCodes(),
-                            cpuLoad = rawMetrics.cpuLoad.stripAnsiCodes()
+                            cpuLoad = rawMetrics.cpuLoad.stripAnsiCodes(),
+                            gpuInfo = rawMetrics.gpuInfo.stripAnsiCodes(),
+                            networkStatus = rawMetrics.networkStatus.stripAnsiCodes()
                         )
                     }
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     e.printStackTrace()
+                    _systemMetrics.value = SystemMetrics(
+                        osInfo = "ERROR DE CONEXIÓN",
+                        ramUsage = e.localizedMessage ?: "Unknown",
+                        cpuLoad = "Revisa Logcat",
+                        gpuInfo = "Fallo FFI",
+                        networkStatus = "Desconectado"
+                    )
                 }
                 delay(1000L) 
+            }
+        }
+    }
+
+    fun sendCommandToSsh(cmd: String) {
+        val trimmedCmd = cmd.trim()
+        if (trimmedCmd.isBlank()) return
+
+        if (videoClient == null) {
+            _terminalLogs.value = _terminalLogs.value + "> $trimmedCmd" + "Error: Not connected to any device. Please go to 'Devices' tab."
+            return
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            _terminalLogs.value = _terminalLogs.value + "> $trimmedCmd"
+            try {
+                val response = videoClient?.executeCommand(trimmedCmd)
+                val output = response?.stripAnsiCodes()
+                if (output != null) {
+                    _terminalLogs.value = _terminalLogs.value + output
+                }
+            } catch (e: Exception) {
+                _terminalLogs.value = _terminalLogs.value + "Error: ${e.localizedMessage ?: "Command failed"}"
             }
         }
     }
@@ -143,5 +219,8 @@ class MolexViewModel : ViewModel() {
         metricsJob?.cancel()
         videoClient?.destroy()
         inputClient?.destroy()
+        videoClient = null
+        inputClient = null
+        _isConnected.value = false
     }
 }

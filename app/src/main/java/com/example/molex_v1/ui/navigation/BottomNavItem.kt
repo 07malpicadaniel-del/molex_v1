@@ -14,8 +14,8 @@ sealed class BottomNavItem(
     val icon: ImageVector
 ) {
     object Ssh : BottomNavItem("ssh", "SSH", Icons.Default.Terminal)
-    object Metrics : BottomNavItem("metrics", "Métricas", Icons.Default.Analytics)
-    object Remote : BottomNavItem("remote", "Pantalla", Icons.Default.DesktopMac)
-    object Settings : BottomNavItem("settings", "Ajustes", Icons.Default.Settings)
-    object Devices : BottomNavItem("devices", "Dispositivos", Icons.Default.Dns)
+    object Metrics : BottomNavItem("metrics", "Metrics", Icons.Default.Analytics)
+    object Remote : BottomNavItem("remote", "Screen", Icons.Default.DesktopMac)
+    object Settings : BottomNavItem("settings", "Settings", Icons.Default.Settings)
+    object Devices : BottomNavItem("devices", "Devices", Icons.Default.Dns)
 }

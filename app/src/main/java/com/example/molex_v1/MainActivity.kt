@@ -5,13 +5,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.example.molex_v1.ui.MainScreen
 import com.example.molex_v1.ui.theme.Molex_v1Theme
-import uniffi.client.MolexInputClient
-import uniffi.client.MolexVideoClient
-import uniffi.client.ServerProfile
 
 class MainActivity : ComponentActivity() {
 
@@ -27,10 +25,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         
         setContent {
             Molex_v1Theme {
-                // Mostramos directamente la pantalla de control con Scaffold
                 MainScreen(viewModel = viewModel)
             }
         }

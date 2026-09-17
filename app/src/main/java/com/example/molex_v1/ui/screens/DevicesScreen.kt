@@ -33,7 +33,7 @@ fun DevicesScreen(viewModel: MolexViewModel, onDeviceSelected: () -> Unit) {
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary
             ) {
-                Icon(Icons.Default.Add, contentDescription = "Añadir Dispositivo")
+                Icon(Icons.Default.Add, contentDescription = "Add Device")
             }
         },
         containerColor = MaterialTheme.colorScheme.background
@@ -45,7 +45,7 @@ fun DevicesScreen(viewModel: MolexViewModel, onDeviceSelected: () -> Unit) {
                 .padding(16.dp)
         ) {
             Text(
-                text = "Mis Dispositivos (Wayland)",
+                text = "My Devices (Wayland)",
                 style = MaterialTheme.typography.headlineMedium,
                 color = MaterialTheme.colorScheme.onBackground,
                 fontWeight = FontWeight.Bold,
@@ -55,7 +55,7 @@ fun DevicesScreen(viewModel: MolexViewModel, onDeviceSelected: () -> Unit) {
             if (savedDevices.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        text = "No tienes servidores guardados.\nToca el '+' para agregar uno.",
+                        text = "No saved servers.\nTap '+' to add one.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyLarge
                     )
@@ -65,7 +65,7 @@ fun DevicesScreen(viewModel: MolexViewModel, onDeviceSelected: () -> Unit) {
                     items(savedDevices) { profile ->
                         DeviceCard(profile = profile, onClick = {
                             viewModel.connectToServer(profile)
-                            onDeviceSelected() // Navegar de vuelta a la pantalla de control
+                            onDeviceSelected()
                         })
                     }
                 }
@@ -77,11 +77,14 @@ fun DevicesScreen(viewModel: MolexViewModel, onDeviceSelected: () -> Unit) {
         AddDeviceDialog(
             onDismiss = { showAddDialog = false },
             onSave = { host, port, user, pass ->
+                val cleanedHost = host.trim()
+                val cleanedUser = user.trim()
+                val cleanedPass = pass.trim()
                 val newProfile = ServerProfile(
-                    host = host,
-                    port = port.toUShort(),
-                    username = user,
-                    password = pass.ifBlank { null }
+                    host = cleanedHost,
+                    port = port.trim().toUShortOrNull() ?: 22u,
+                    username = cleanedUser,
+                    password = cleanedPass.ifBlank { null }
                 )
                 viewModel.addDevice(newProfile)
                 showAddDialog = false
@@ -122,7 +125,7 @@ fun DeviceCard(profile: ServerProfile, onClick: () -> Unit) {
                     style = MaterialTheme.typography.bodyLarge
                 )
                 Text(
-                    text = "Puerto SSH: ${profile.port}",
+                    text = "SSH Port: ${profile.port}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.secondary
                 )
@@ -143,14 +146,14 @@ fun AddDeviceDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Nuevo Servidor Wayland", color = MaterialTheme.colorScheme.onSurface) },
+        title = { Text("New Wayland Server", color = MaterialTheme.colorScheme.onSurface) },
         containerColor = MaterialTheme.colorScheme.surfaceVariant,
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = host,
                     onValueChange = { host = it },
-                    label = { Text("IP o Hostname") },
+                    label = { Text("IP or Hostname") },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = MaterialTheme.colorScheme.primary,
@@ -160,7 +163,7 @@ fun AddDeviceDialog(
                 OutlinedTextField(
                     value = port,
                     onValueChange = { port = it },
-                    label = { Text("Puerto (SSH)") },
+                    label = { Text("Port (SSH)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
@@ -171,7 +174,7 @@ fun AddDeviceDialog(
                 OutlinedTextField(
                     value = username,
                     onValueChange = { username = it },
-                    label = { Text("Usuario") },
+                    label = { Text("Username") },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = MaterialTheme.colorScheme.primary,
@@ -181,8 +184,12 @@ fun AddDeviceDialog(
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
-                    label = { Text("Contraseña") },
+                    label = { Text("Password") },
                     visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Password,
+                        autoCorrect = false
+                    ),
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = MaterialTheme.colorScheme.primary,
@@ -197,12 +204,12 @@ fun AddDeviceDialog(
                 enabled = host.isNotBlank() && port.isNotBlank() && username.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
             ) {
-                Text("Guardar", color = MaterialTheme.colorScheme.onPrimary)
+                Text("Save", color = MaterialTheme.colorScheme.onPrimary)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancelar", color = MaterialTheme.colorScheme.secondary)
+                Text("Cancel", color = MaterialTheme.colorScheme.secondary)
             }
         }
     )

@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-// Instancia global de Tokio para ejecutar funciones asíncronas desde Kotlin
+// Instancia global de Tokio para ejecutar funciones asíncronas desde Kotlin FFI
 static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
 fn get_rt() -> &'static tokio::runtime::Runtime {
@@ -14,7 +14,7 @@ fn get_rt() -> &'static tokio::runtime::Runtime {
 }
 
 // ==========================================
-// 🧩 MODELOS DE DATOS (Exportados a Kotlin)
+//  MODELOS DE DATOS (Exportados a Kotlin)
 // ==========================================
 
 #[derive(Clone, uniffi::Record)]
@@ -30,6 +30,8 @@ pub struct SystemMetrics {
     pub os_info: String,
     pub ram_usage: String,
     pub cpu_load: String,
+    pub gpu_info: String,       // NUEVO
+    pub network_status: String, // NUEVO
 }
 
 #[derive(Debug, uniffi::Error, thiserror::Error)]
@@ -39,7 +41,7 @@ pub enum MolexError {
 }
 
 // ==========================================
-// 🔌 MOTOR SSH (Configuración Interna)
+//  MOTOR SSH (Configuración Interna)
 // ==========================================
 
 pub struct MolexSshHandler;
@@ -48,28 +50,27 @@ pub struct MolexSshHandler;
 impl Handler for MolexSshHandler {
     type Error = russh::Error;
     async fn check_server_key(&mut self, _server_public_key: &russh_keys::key::PublicKey) -> Result<bool, Self::Error> {
-        Ok(true) // Aceptamos cualquier llave para máxima velocidad
+        Ok(true) // Aceptamos cualquier llave para máxima velocidad en LAN
     }
 }
 
 // ==========================================
-// 📡 CLIENTE DE VIDEO Y MÉTRICAS (UniFFI)
+//  CLIENTE DE VIDEO Y MÉTRICAS (UniFFI)
 // ==========================================
 
 #[derive(uniffi::Object)]
 pub struct MolexVideoClient {
     pub profile: ServerProfile,
-    // SOLUCIÓN: Envolvemos el Handle en Arc<Mutex<...>> para poder compartirlo y clonarlo con seguridad
     session: Mutex<Option<Arc<Mutex<Handle<MolexSshHandler>>>>>,
     last_frame_hash: Mutex<u64>,
 }
 
+// Métodos internos asíncronos (No exportados)
 impl MolexVideoClient {
     // Obtiene la sesión actual o crea una nueva si no existe
     async fn get_session(&self) -> Result<Arc<Mutex<Handle<MolexSshHandler>>>, MolexError> {
         let mut session_guard = self.session.lock().await;
         
-        // Si ya hay una sesión activa, devolvemos un clon del puntero (Arc)
         if let Some(handle_arc) = session_guard.as_ref() {
             return Ok(handle_arc.clone());
         }
@@ -79,12 +80,12 @@ impl MolexVideoClient {
         let addr = format!("{}:{}", self.profile.host, self.profile.port);
         
         let connect_future = russh::client::connect(config, addr, MolexSshHandler);
-        let mut handle = tokio::time::timeout(Duration::from_secs(3), connect_future)
+        let mut handle = tokio::time::timeout(Duration::from_secs(10), connect_future)
             .await.map_err(|_| MolexError::Generic("Timeout conectando IP".into()))?
             .map_err(|e| MolexError::Generic(e.to_string()))?;
 
         let auth_future = handle.authenticate_password(&self.profile.username, pass);
-        let auth_res = tokio::time::timeout(Duration::from_secs(3), auth_future)
+        let auth_res = tokio::time::timeout(Duration::from_secs(10), auth_future)
             .await.map_err(|_| MolexError::Generic("Timeout autenticación".into()))?
             .map_err(|e| MolexError::Generic(e.to_string()))?;
 
@@ -92,7 +93,6 @@ impl MolexVideoClient {
             return Err(MolexError::Generic("Contraseña incorrecta".into()));
         }
 
-        // Guardamos la nueva conexión en el puntero inteligente
         let handle_arc = Arc::new(Mutex::new(handle));
         *session_guard = Some(handle_arc.clone());
         
@@ -101,23 +101,47 @@ impl MolexVideoClient {
 
     // Ejecutador universal de comandos bash
     async fn run_command(&self, cmd: &str) -> Result<String, MolexError> {
-        let session_arc = self.get_session().await?;
-        let session = session_arc.lock().await; // Bloqueamos el Mutex para usar la sesión SSH
-        
-        let mut channel = session.channel_open_session().await.map_err(|e| MolexError::Generic(e.to_string()))?;
+        let mut channel = {
+            let session_arc = self.get_session().await?;
+            // 1. Aquí corregimos el warning quitando "mut"
+            let session = session_arc.lock().await;
+            session.channel_open_session().await.map_err(|e| MolexError::Generic(e.to_string()))?
+        }; // Se libera el Mutex inmediatamente.
+
         channel.exec(true, cmd).await.map_err(|e| MolexError::Generic(e.to_string()))?;
 
         let mut output = String::new();
+        let mut exit_code = None;
+
         while let Some(msg) = channel.wait().await {
-            if let ChannelMsg::Data { data } = msg {
-                output.push_str(&String::from_utf8_lossy(&data));
+            match msg {
+                ChannelMsg::Data { ref data } => {
+                    output.push_str(&String::from_utf8_lossy(data));
+                }
+                // 2. TRAMPA: Errores (Stderr)
+                ChannelMsg::ExtendedData { ref data, .. } => {
+                    output.push_str(&String::from_utf8_lossy(data));
+                }
+                // 3. TRAMPA: Código de finalización (Exit Code)
+                ChannelMsg::ExitStatus { exit_status } => {
+                    exit_code = Some(exit_status);
+                }
+                _ => {}
             }
         }
-        Ok(output.trim().to_string())
+
+        let trimmed = output.trim().to_string();
+        
+        // 4. Si Linux no imprimió texto, enviamos nuestra trampa.
+        if trimmed.is_empty() {
+            Ok(format!("[No output - Exit Code: {:?}]", exit_code))
+        } else {
+            Ok(trimmed)
+        }
     }
 }
 
-// Métodos públicos que Kotlin podrá utilizar
+// Métodos públicos que Kotlin podrá utilizar FFI
 #[uniffi::export]
 impl MolexVideoClient {
     #[uniffi::constructor]
@@ -135,21 +159,27 @@ impl MolexVideoClient {
             let ram_usage = self.run_command("free -m | awk '/Mem:/ {print $3\"MB / \"$2\"MB\"}'").await.unwrap_or_else(|_| "0MB / 0MB".into());
             let cpu_load = self.run_command("top -bn1 | grep 'Cpu(s)' | awk '{print $2 + $4\"%\"}'").await.unwrap_or_else(|_| "0%".into());
             
-            Ok(SystemMetrics { os_info, ram_usage, cpu_load })
+            // Extracción de GPU (Filtra VGA o 3D controller)
+            let gpu_info = self.run_command("lspci | grep -iE 'vga|3d' | cut -d':' -f3 | sed 's/^ //'").await.unwrap_or_else(|_| "GPU Desconocida".into());
+            
+            // Estado de red (Interfaces activas IP)
+            let network_status = self.run_command("ip -br a | grep UP | awk '{print $1, $3}'").await.unwrap_or_else(|_| "Red Desconocida".into());
+
+            Ok(SystemMetrics { os_info, ram_usage, cpu_load, gpu_info, network_status })
         })
     }
 
     pub fn get_screen_frame(&self) -> Result<String, MolexError> {
         get_rt().block_on(async {
-            // Utilizamos 'grim' que es el capturador nativo de Wayland
+            // Utilizamos 'grim' con las variables de Wayland asignadas al usuario
             let cmd = "WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 grim -t jpeg -q 30 - | base64 -w 0";
             let base64_image = self.run_command(cmd).await?;
 
-            if base64_image.is_empty() {
-                return Err(MolexError::Generic("Error capturando pantalla (¿grim está instalado?)".into()));
+            if base64_image.is_empty() || base64_image.starts_with("[No output") {
+                return Err(MolexError::Generic(format!("Error capturando pantalla: {}", base64_image)));
             }
 
-            // Algoritmo LTPO
+            // Algoritmo LTPO de hash
             let mut hasher = DefaultHasher::new();
             base64_image.hash(&mut hasher);
             let current_hash = hasher.finish();
@@ -161,6 +191,15 @@ impl MolexVideoClient {
             
             *last_hash = current_hash;
             Ok(base64_image)
+        })
+    }
+
+    pub fn execute_command(&self, cmd: String) -> String {
+        get_rt().block_on(async {
+            match self.run_command(&cmd).await {
+                Ok(output) => output,
+                Err(e) => format!("Error SSH: {}", e),
+            }
         })
     }
 }

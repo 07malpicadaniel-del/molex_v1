@@ -728,6 +728,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -763,6 +765,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_client_fn_constructor_molexvideoclient_new(`profile`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
+    fun uniffi_client_fn_method_molexvideoclient_execute_command(`ptr`: Pointer,`cmd`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_client_fn_method_molexvideoclient_get_screen_frame(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_client_fn_method_molexvideoclient_get_system_metrics(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -883,6 +887,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_client_checksum_method_molexinputclient_send_mouse_move(
     ): Short
+    fun uniffi_client_checksum_method_molexvideoclient_execute_command(
+    ): Short
     fun uniffi_client_checksum_method_molexvideoclient_get_screen_frame(
     ): Short
     fun uniffi_client_checksum_method_molexvideoclient_get_system_metrics(
@@ -912,6 +918,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_checksum_method_molexinputclient_send_mouse_move() != 23205.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_checksum_method_molexvideoclient_execute_command() != 39383.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_checksum_method_molexvideoclient_get_screen_frame() != 9440.toShort()) {
@@ -1517,6 +1526,8 @@ public object FfiConverterTypeMolexInputClient: FfiConverter<MolexInputClient, P
 
 public interface MolexVideoClientInterface {
     
+    fun `executeCommand`(`cmd`: kotlin.String): kotlin.String
+    
     fun `getScreenFrame`(): kotlin.String
     
     fun `getSystemMetrics`(): SystemMetrics
@@ -1611,6 +1622,18 @@ open class MolexVideoClient: Disposable, AutoCloseable, MolexVideoClientInterfac
             UniffiLib.INSTANCE.uniffi_client_fn_clone_molexvideoclient(pointer!!, status)
         }
     }
+
+    override fun `executeCommand`(`cmd`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_fn_method_molexvideoclient_execute_command(
+        it, FfiConverterString.lower(`cmd`),_status)
+}
+    }
+    )
+    }
+    
 
     
     @Throws(MolexException::class)override fun `getScreenFrame`(): kotlin.String {
@@ -1719,7 +1742,9 @@ public object FfiConverterTypeServerProfile: FfiConverterRustBuffer<ServerProfil
 data class SystemMetrics (
     var `osInfo`: kotlin.String, 
     var `ramUsage`: kotlin.String, 
-    var `cpuLoad`: kotlin.String
+    var `cpuLoad`: kotlin.String, 
+    var `gpuInfo`: kotlin.String, 
+    var `networkStatus`: kotlin.String
 ) {
     
     companion object
@@ -1734,19 +1759,25 @@ public object FfiConverterTypeSystemMetrics: FfiConverterRustBuffer<SystemMetric
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
     override fun allocationSize(value: SystemMetrics) = (
             FfiConverterString.allocationSize(value.`osInfo`) +
             FfiConverterString.allocationSize(value.`ramUsage`) +
-            FfiConverterString.allocationSize(value.`cpuLoad`)
+            FfiConverterString.allocationSize(value.`cpuLoad`) +
+            FfiConverterString.allocationSize(value.`gpuInfo`) +
+            FfiConverterString.allocationSize(value.`networkStatus`)
     )
 
     override fun write(value: SystemMetrics, buf: ByteBuffer) {
             FfiConverterString.write(value.`osInfo`, buf)
             FfiConverterString.write(value.`ramUsage`, buf)
             FfiConverterString.write(value.`cpuLoad`, buf)
+            FfiConverterString.write(value.`gpuInfo`, buf)
+            FfiConverterString.write(value.`networkStatus`, buf)
     }
 }
 
