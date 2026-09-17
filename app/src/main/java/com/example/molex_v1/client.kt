@@ -730,6 +730,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -767,7 +769,9 @@ internal interface UniffiLib : Library {
     ): Pointer
     fun uniffi_client_fn_method_molexvideoclient_execute_command(`ptr`: Pointer,`cmd`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_client_fn_method_molexvideoclient_get_screen_frame(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_client_fn_method_molexvideoclient_get_monitors(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_client_fn_method_molexvideoclient_get_screen_frame(`ptr`: Pointer,`monitorName`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_client_fn_method_molexvideoclient_get_system_metrics(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -889,6 +893,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_client_checksum_method_molexvideoclient_execute_command(
     ): Short
+    fun uniffi_client_checksum_method_molexvideoclient_get_monitors(
+    ): Short
     fun uniffi_client_checksum_method_molexvideoclient_get_screen_frame(
     ): Short
     fun uniffi_client_checksum_method_molexvideoclient_get_system_metrics(
@@ -923,7 +929,10 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_client_checksum_method_molexvideoclient_execute_command() != 39383.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_client_checksum_method_molexvideoclient_get_screen_frame() != 9440.toShort()) {
+    if (lib.uniffi_client_checksum_method_molexvideoclient_get_monitors() != 15425.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_checksum_method_molexvideoclient_get_screen_frame() != 41822.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_checksum_method_molexvideoclient_get_system_metrics() != 49669.toShort()) {
@@ -1245,6 +1254,7 @@ private class UniffiJnaCleanable(
 // using Android or not.
 // There are further runtime checks to chose the correct implementation
 // of the cleaner.
+@Suppress("NewApi")
 private fun UniffiCleaner.Companion.create(): UniffiCleaner =
     try {
         // For safety's sake: if the library hasn't been run in android_cleaner = true
@@ -1258,6 +1268,7 @@ private fun UniffiCleaner.Companion.create(): UniffiCleaner =
         UniffiJnaCleaner()
     }
 
+@androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.TIRAMISU)
 private class JavaLangRefCleaner : UniffiCleaner {
     val cleaner = java.lang.ref.Cleaner.create()
 
@@ -1265,6 +1276,7 @@ private class JavaLangRefCleaner : UniffiCleaner {
         JavaLangRefCleanable(cleaner.register(value, cleanUpTask))
 }
 
+@androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.TIRAMISU)
 private class JavaLangRefCleanable(
     val cleanable: java.lang.ref.Cleaner.Cleanable
 ) : UniffiCleaner.Cleanable {
@@ -1528,7 +1540,9 @@ public interface MolexVideoClientInterface {
     
     fun `executeCommand`(`cmd`: kotlin.String): kotlin.String
     
-    fun `getScreenFrame`(): kotlin.String
+    fun `getMonitors`(): List<kotlin.String>
+    
+    fun `getScreenFrame`(`monitorName`: kotlin.String?): kotlin.String
     
     fun `getSystemMetrics`(): SystemMetrics
     
@@ -1636,12 +1650,25 @@ open class MolexVideoClient: Disposable, AutoCloseable, MolexVideoClientInterfac
     
 
     
-    @Throws(MolexException::class)override fun `getScreenFrame`(): kotlin.String {
+    @Throws(MolexException::class)override fun `getMonitors`(): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(MolexException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_fn_method_molexvideoclient_get_monitors(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(MolexException::class)override fun `getScreenFrame`(`monitorName`: kotlin.String?): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCallWithError(MolexException) { _status ->
     UniffiLib.INSTANCE.uniffi_client_fn_method_molexvideoclient_get_screen_frame(
-        it, _status)
+        it, FfiConverterOptionalString.lower(`monitorName`),_status)
 }
     }
     )
@@ -1868,6 +1895,34 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         } else {
             buf.put(1)
             FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
+    override fun read(buf: ByteBuffer): List<kotlin.String> {
+        val len = buf.getInt()
+        return List<kotlin.String>(len) {
+            FfiConverterString.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.String>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterString.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterString.write(it, buf)
         }
     }
 }

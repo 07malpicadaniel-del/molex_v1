@@ -2,7 +2,7 @@
 
 Molex is an ultra-low latency remote desktop platform specifically designed for controlling Linux Wayland environments from an Android device.
 
-By leveraging a hybrid Rust/Kotlin architecture, Molex achieves high performance, minimal CPU overhead, and responsive user interaction.
+By leveraging a hybrid Rust/Kotlin architecture, Molex achieves high performance, minimal CPU overhead, and responsive user interaction inspired by game-streaming platforms like Moonlight.
 
 ---
 
@@ -24,23 +24,28 @@ molex_v1/
 ### 1. Backend (Rust Motor)
 - **`client` submodule**: Compiles to a dynamic library (`libclient.so`) using `UniFFI` bindings for Android JNI integration. It manages:
   - SSH channel creation and frame retrieval via `MolexVideoClient`.
+  - Remote command execution via `executeCommand(cmd)`.
   - UDP event transmission for low-latency input control via `MolexInputClient`.
-- **`daemon` submodule**: Runs as a lightweight Linux daemon on the host machine to inject keyboard and mouse events directly into the Linux kernel via `uinput`.
+- **`daemon` submodule**: Runs as a lightweight Linux daemon on the host machine to inject keyboard and mouse events directly into the Linux kernel via `uinput`/`evdev`.
 
 ### 2. Frontend (Android / Kotlin & Jetpack Compose)
 - **Framework**: Jetpack Compose (Material3) with `StateFlow` and coroutines (`Dispatchers.IO`).
 - **ViewModel (`MolexViewModel`)**: Decouples network I/O and FFI calls from the Compose rendering loop to guarantee 60 FPS UI performance without main thread blocking.
-- **Navigation**: Clean single-activity architecture with Compose Navigation and Material3 `NavigationBar`.
+- **Navigation**: Clean single-activity architecture with Compose Navigation, Material3 `NavigationBar`, and route-based conditional bottom bar visibility.
 
 ---
 
-## ✨ Key Features
+## ✨ Production Features
 
 - **Low-Latency Video Streaming via SSH**: Uses `grim` for Wayland screen captures encoded as JPEG over Base64, with frame skipping (`SAME_FRAME`) to optimize bandwidth and CPU usage.
-- **Real-time System Telemetry**: Fetches OS version, CPU load, and RAM usage metrics asynchronously through the native `MolexVideoClient`.
-- **FFI Profile Management**: Dynamic in-memory server profile management (`ServerProfile`), supporting custom SSH host, port, username, and password credentials.
-- **Interactive Touch & Mouse Gestures**: Translates Android touch gestures (drag, tap, long press) into normalized relative coordinates (0.0 to 1.0) and transmits mouse movements and click events.
-- **Resilient State & Connection Management**: Robust error handling that detects SSH server disconnections, prevents infinite loops, and updates `VideoState` reactively.
+- **Interactive SSH Terminal**: Built-in terminal emulator with command history state retention, asynchronous non-blocking command execution, and ANSI escape code filtering (`stripAnsiCodes`).
+- **Advanced System Telemetry**: Real-time asynchronous polling of OS info, CPU load, RAM usage, GPU details, and network status rendered in dedicated Material3 cards.
+- **FFI Profile Management**: Dynamic in-memory server profile management (`ServerProfile`), supporting custom SSH host, port, username, and password credentials with automatic input sanitization.
+- **Immersive Full-Screen Desktop View**:
+  - Automatically locks landscape orientation on `RemoteScreen`.
+  - Dynamically hides the bottom `NavigationBar` for full-screen display.
+  - Subtle floating overlay drawer menu for quick navigation and returning to device settings.
+- **Zero-Latency Touch & Mouse Injection Architecture**: Translates Android touch gestures (drag, tap, long press) into normalized relative coordinates (`0.0f` to `1.0f`) based on visual container dimensions (`ContentScale.FillBounds`) and transmits mouse movement/click events directly to Linux `uinput`.
 
 ---
 
@@ -71,5 +76,5 @@ molex_v1/
 ## 🛠️ Tech Stack
 
 - **Frontend**: Kotlin, Jetpack Compose, Material 3, Coroutines, StateFlow, Navigation Compose.
-- **Backend**: Rust, UniFFI, SSH2, Tokio, uinput.
+- **Backend**: Rust, UniFFI, SSH2, Tokio, uinput, evdev.
 - **Platform**: Android SDK, Linux Wayland.

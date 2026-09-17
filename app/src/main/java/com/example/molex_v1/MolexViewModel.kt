@@ -52,6 +52,13 @@ class MolexViewModel : ViewModel() {
     private val _terminalLogs = MutableStateFlow<List<String>>(emptyList())
     val terminalLogs = _terminalLogs.asStateFlow()
 
+    // Lista y selección de monitores desde Rust FFI
+    private val _availableMonitors = MutableStateFlow<List<String>>(emptyList())
+    val availableMonitors = _availableMonitors.asStateFlow()
+
+    private val _selectedMonitor = MutableStateFlow<String?>(null)
+    val selectedMonitor = _selectedMonitor.asStateFlow()
+
     // Gestión de Dispositivos (En memoria por ahora)
     private val _savedDevices = MutableStateFlow<List<ServerProfile>>(emptyList())
     val savedDevices = _savedDevices.asStateFlow()
@@ -60,6 +67,32 @@ class MolexViewModel : ViewModel() {
         val currentList = _savedDevices.value.toMutableList()
         currentList.add(profile)
         _savedDevices.value = currentList
+    }
+
+    fun selectMonitor(monitorName: String) {
+        _selectedMonitor.value = monitorName
+    }
+
+    /**
+     * Cierra la sesión activa destruyendo los clientes FFI y cancelando los Jobs.
+     */
+    fun disconnect() {
+        videoJob?.cancel()
+        metricsJob?.cancel()
+        videoJob = null
+        metricsJob = null
+
+        videoClient?.destroy()
+        inputClient?.destroy()
+        videoClient = null
+        inputClient = null
+
+        _isConnected.value = false
+        _currentFrame.value = null
+        _systemMetrics.value = null
+        _availableMonitors.value = emptyList()
+        _selectedMonitor.value = null
+        _videoState.value = VideoState.Idle
     }
 
     /**
@@ -74,35 +107,30 @@ class MolexViewModel : ViewModel() {
             password = profile.password?.trim()?.ifBlank { null }
         )
 
-        // Cancelar bucles activos
-        videoJob?.cancel()
-        metricsJob?.cancel()
-
-        // Liberar sockets e instancias de Rust FFI previas
-        videoClient?.destroy()
-        inputClient?.destroy()
-        videoClient = null
-        inputClient = null
-        _isConnected.value = false
-
-        // Reiniciar estado UI
-        _currentFrame.value = null
-        _systemMetrics.value = null
+        disconnect()
         _videoState.value = VideoState.Loading
 
-        // Instanciar nuevos clientes
-        try {
-            videoClient = MolexVideoClient(sanitizedProfile)
-            inputClient = MolexInputClient(sanitizedProfile.host)
-            _isConnected.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val newVideoClient = MolexVideoClient(sanitizedProfile)
+                val newInputClient = MolexInputClient(sanitizedProfile.host)
+                
+                videoClient = newVideoClient
+                inputClient = newInputClient
+                
+                _isConnected.value = true
 
-            // Arrancar bucles
-            startVideoLoop()
-            startMetricsLoop()
-        } catch (e: Exception) {
-            e.printStackTrace()
-            _isConnected.value = false
-            _videoState.value = VideoState.Error(e.localizedMessage ?: "Conexión perdida")
+                val monitors = newVideoClient.getMonitors()
+                _availableMonitors.value = monitors
+                _selectedMonitor.value = monitors.firstOrNull()
+
+                startVideoLoop()
+                startMetricsLoop()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _isConnected.value = false
+                _videoState.value = VideoState.Error(e.localizedMessage ?: "Conexión perdida")
+            }
         }
     }
 
@@ -110,14 +138,20 @@ class MolexViewModel : ViewModel() {
         videoJob = viewModelScope.launch(Dispatchers.IO) {
             while (isActive) {
                 try {
-                    val frameData = videoClient?.getScreenFrame()
+                    val frameData = videoClient?.getScreenFrame(_selectedMonitor.value)
                     if (frameData != null && frameData != "SAME_FRAME") {
                         try {
                             val bytes = Base64.decode(frameData, Base64.NO_WRAP)
                             val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                            bitmap?.let { 
-                                _currentFrame.value = it.asImageBitmap() 
-                                _videoState.value = VideoState.Success(it.asImageBitmap())
+
+                            if (bitmap != null) {
+                                _currentFrame.value = bitmap.asImageBitmap()
+                                _videoState.value = VideoState.Success(bitmap.asImageBitmap())
+                            } else {
+                                Log.e("MolexVideo", "Decodificación fallida. Rust envió: $frameData")
+                                _isConnected.value = false
+                                _videoState.value = VideoState.Error("Error de cámara: $frameData")
+                                break
                             }
                         } catch (e: IllegalArgumentException) {
                             Log.e("MolexVideo", "Error de Linux: $frameData", e)
@@ -214,13 +248,6 @@ class MolexViewModel : ViewModel() {
 
     override fun onCleared() {
         super.onCleared()
-        // Liberar recursos garantizados si el ViewModel muere
-        videoJob?.cancel()
-        metricsJob?.cancel()
-        videoClient?.destroy()
-        inputClient?.destroy()
-        videoClient = null
-        inputClient = null
-        _isConnected.value = false
+        disconnect()
     }
 }
