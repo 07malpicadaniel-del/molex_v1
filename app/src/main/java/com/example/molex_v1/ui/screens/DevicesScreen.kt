@@ -42,14 +42,15 @@ fun DevicesScreen(viewModel: MolexViewModel, onDeviceSelected: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(16.dp)
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = "My Devices (Wayland)",
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 16.dp)
+                text = "MOLEX",
+                style = MaterialTheme.typography.headlineLarge,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier.padding(top = 16.dp, bottom = 24.dp)
             )
 
             if (savedDevices.isEmpty()) {
@@ -61,7 +62,10 @@ fun DevicesScreen(viewModel: MolexViewModel, onDeviceSelected: () -> Unit) {
                     )
                 }
             } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                     items(savedDevices) { profile ->
                         DeviceCard(profile = profile, onClick = {
                             viewModel.connectToServer(profile)
