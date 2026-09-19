@@ -1,17 +1,12 @@
-// Declaramos los módulos que acabamos de crear
-mod virtual_device;
 mod udp_server;
-
-use std::error::Error;
+mod virtual_device;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    println!("🚀 Iniciando Molex Daemon (Root)...");
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("🚀 Iniciando Molex Daemon (Kernel Injector)...");
     
-    // Arrancamos el servidor UDP y bloqueamos el hilo para que se quede escuchando
-    if let Err(e) = udp_server::run_server().await {
-        eprintln!("❌ Error fatal en el servidor: {}", e);
-    }
-
+    // Escuchamos en el puerto 9090 (El que configuramos ayer en el cliente UDP)
+    udp_server::start_server("0.0.0.0:9090").await?;
+    
     Ok(())
 }

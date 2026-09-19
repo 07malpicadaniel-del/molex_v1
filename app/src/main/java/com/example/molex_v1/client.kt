@@ -920,7 +920,7 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
-    if (lib.uniffi_client_checksum_method_molexinputclient_send_mouse_click() != 25636.toShort()) {
+    if (lib.uniffi_client_checksum_method_molexinputclient_send_mouse_click() != 30341.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_checksum_method_molexinputclient_send_mouse_move() != 23205.toShort()) {
@@ -938,7 +938,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_client_checksum_method_molexvideoclient_get_system_metrics() != 49669.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_client_checksum_constructor_molexinputclient_new() != 59539.toShort()) {
+    if (lib.uniffi_client_checksum_constructor_molexinputclient_new() != 32772.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_checksum_constructor_molexvideoclient_new() != 15809.toShort()) {
@@ -1254,7 +1254,6 @@ private class UniffiJnaCleanable(
 // using Android or not.
 // There are further runtime checks to chose the correct implementation
 // of the cleaner.
-@Suppress("NewApi")
 private fun UniffiCleaner.Companion.create(): UniffiCleaner =
     try {
         // For safety's sake: if the library hasn't been run in android_cleaner = true
@@ -1268,7 +1267,6 @@ private fun UniffiCleaner.Companion.create(): UniffiCleaner =
         UniffiJnaCleaner()
     }
 
-@androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.TIRAMISU)
 private class JavaLangRefCleaner : UniffiCleaner {
     val cleaner = java.lang.ref.Cleaner.create()
 
@@ -1276,7 +1274,6 @@ private class JavaLangRefCleaner : UniffiCleaner {
         JavaLangRefCleanable(cleaner.register(value, cleanUpTask))
 }
 
-@androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.TIRAMISU)
 private class JavaLangRefCleanable(
     val cleanable: java.lang.ref.Cleaner.Cleanable
 ) : UniffiCleaner.Cleanable {
@@ -1310,7 +1307,7 @@ open class MolexInputClient: Disposable, AutoCloseable, MolexInputClientInterfac
     }
     constructor(`host`: kotlin.String) :
         this(
-    uniffiRustCall() { _status ->
+    uniffiRustCallWithError(MolexException) { _status ->
     UniffiLib.INSTANCE.uniffi_client_fn_constructor_molexinputclient_new(
         FfiConverterString.lower(`host`),_status)
 }

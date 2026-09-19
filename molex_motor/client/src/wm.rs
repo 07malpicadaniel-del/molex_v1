@@ -22,12 +22,14 @@ impl MolexVideoClient {
         Ok(monitors)
     }
 
-    pub(crate) async fn capture_frame_internal(&self, monitor_name: Option<String>) -> Result<String, MolexError> {
-        // SOLUCIÓN 1: Limpieza agresiva del nombre para borrar retornos de carro (\r) invisibles
+
+pub(crate) async fn capture_frame_internal(&self, monitor_name: Option<String>) -> Result<String, MolexError> {
+        // Limpiamos la basura invisible
         let clean_name = monitor_name.unwrap_or_default().trim().replace(['\r', '\n'], "");
         
+        // SOLUCIÓN: Quitamos las comillas simples alrededor de {}
         let output_flag = if !clean_name.is_empty() {
-            format!("-o '{}' ", clean_name)
+            format!("-o {} ", clean_name) 
         } else {
             "".to_string()
         };
@@ -37,6 +39,8 @@ impl MolexVideoClient {
             output_flag
         );
         
+        // ... (el resto queda exactamente igual) ...
+
         let base64_image = self.run_command(&cmd).await?;
 
         // SOLUCIÓN 2: Si el string devuelto tiene espacios, NO es Base64. Es un error de la terminal de Linux.

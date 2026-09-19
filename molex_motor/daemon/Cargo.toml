@@ -4,8 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# Servidor asíncrono
-tokio = { version = "1.38", features = ["full"] }
-
-# API directa al Kernel de Linux (/dev/uinput) para saltar Wayland
+tokio = { version = "1.37", features = ["full"] }
 evdev = "0.12.1"
