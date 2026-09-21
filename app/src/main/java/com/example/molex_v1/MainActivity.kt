@@ -8,6 +8,7 @@ import androidx.activity.viewModels
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import com.example.molex_v1.data.db.AppDatabase
 import com.example.molex_v1.ui.MainScreen
 import com.example.molex_v1.ui.theme.Molex_v1Theme
 
@@ -15,9 +16,10 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: MolexViewModel by viewModels {
         object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                @Suppress("UNCHECKED_CAST")
-                return MolexViewModel() as T
+                val database = AppDatabase.getDatabase(applicationContext)
+                return MolexViewModel(database.deviceDao()) as T
             }
         }
     }
@@ -26,7 +28,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        
+
         setContent {
             Molex_v1Theme {
                 MainScreen(viewModel = viewModel)

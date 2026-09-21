@@ -7,12 +7,18 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.molex_v1.data.db.DeviceDao
+import com.example.molex_v1.data.db.DeviceEntity
 import com.example.molex_v1.utils.stripAnsiCodes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import uniffi.client.MolexInputClient
@@ -27,7 +33,9 @@ sealed class VideoState {
     data class Error(val message: String) : VideoState()
 }
 
-class MolexViewModel : ViewModel() {
+class MolexViewModel(
+    private val deviceDao: DeviceDao
+) : ViewModel() {
 
     // Clientes nativos Rust. Los mantenemos nulos hasta conectarnos
     private var videoClient: MolexVideoClient? = null
@@ -59,14 +67,19 @@ class MolexViewModel : ViewModel() {
     private val _selectedMonitor = MutableStateFlow<String?>(null)
     val selectedMonitor = _selectedMonitor.asStateFlow()
 
-    // Gestión de Dispositivos (En memoria por ahora)
-    private val _savedDevices = MutableStateFlow<List<ServerProfile>>(emptyList())
-    val savedDevices = _savedDevices.asStateFlow()
+    // Gestión de Dispositivos persistidos con Room
+    val savedDevices: StateFlow<List<ServerProfile>> = deviceDao.getAllDevices()
+        .map { entities -> entities.map { it.toServerProfile() } }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
 
     fun addDevice(profile: ServerProfile) {
-        val currentList = _savedDevices.value.toMutableList()
-        currentList.add(profile)
-        _savedDevices.value = currentList
+        viewModelScope.launch(Dispatchers.IO) {
+            deviceDao.insertDevice(DeviceEntity.fromServerProfile(profile))
+        }
     }
 
     fun selectMonitor(monitorName: String) {
