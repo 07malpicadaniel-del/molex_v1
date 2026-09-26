@@ -115,28 +115,55 @@ fun RemoteScreen(
                 Image(
                     bitmap = imageBitmap,
                     contentDescription = "Remote Linux Desktop",
-                    contentScale = ContentScale.FillBounds,
+                    contentScale = ContentScale.Fit, // Genera barras negras si hay disparidad
                     modifier = Modifier
                         .fillMaxSize()
                         .pointerInput(Unit) {
                             detectDragGestures { change, _ ->
-                                change.consume()
-                                val xPercent = (change.position.x / size.width).coerceIn(0f, 1f)
-                                val yPercent = (change.position.y / size.height).coerceIn(0f, 1f)
-                                viewModel.onMouseMove(xPercent, yPercent)
+                                val frame = viewModel.currentFrame.value ?: return@detectDragGestures
+                                val mapped = calculateMappedCoordinates(
+                                    touchX = change.position.x,
+                                    touchY = change.position.y,
+                                    containerWidth = size.width.toFloat(),
+                                    containerHeight = size.height.toFloat(),
+                                    imageWidth = frame.width.toFloat(),
+                                    imageHeight = frame.height.toFloat()
+                                )
+                                if (mapped != null) {
+                                    change.consume()
+                                    viewModel.onMouseMove(mapped.first, mapped.second)
+                                }
                             }
                         }
                         .pointerInput(Unit) {
                             detectTapGestures(
                                 onTap = { offset ->
-                                    val xPercent = (offset.x / size.width).coerceIn(0f, 1f)
-                                    val yPercent = (offset.y / size.height).coerceIn(0f, 1f)
-                                    viewModel.onMouseClick(xPercent, yPercent, isRightClick = false)
+                                    val frame = viewModel.currentFrame.value ?: return@detectTapGestures
+                                    val mapped = calculateMappedCoordinates(
+                                        touchX = offset.x,
+                                        touchY = offset.y,
+                                        containerWidth = size.width.toFloat(),
+                                        containerHeight = size.height.toFloat(),
+                                        imageWidth = frame.width.toFloat(),
+                                        imageHeight = frame.height.toFloat()
+                                    )
+                                    if (mapped != null) {
+                                        viewModel.onMouseClick(mapped.first, mapped.second, isRightClick = false)
+                                    }
                                 },
                                 onLongPress = { offset ->
-                                    val xPercent = (offset.x / size.width).coerceIn(0f, 1f)
-                                    val yPercent = (offset.y / size.height).coerceIn(0f, 1f)
-                                    viewModel.onMouseClick(xPercent, yPercent, isRightClick = true)
+                                    val frame = viewModel.currentFrame.value ?: return@detectTapGestures
+                                    val mapped = calculateMappedCoordinates(
+                                        touchX = offset.x,
+                                        touchY = offset.y,
+                                        containerWidth = size.width.toFloat(),
+                                        containerHeight = size.height.toFloat(),
+                                        imageWidth = frame.width.toFloat(),
+                                        imageHeight = frame.height.toFloat()
+                                    )
+                                    if (mapped != null) {
+                                        viewModel.onMouseClick(mapped.first, mapped.second, isRightClick = true)
+                                    }
                                 }
                             )
                         }
@@ -300,4 +327,49 @@ fun RemoteScreen(
             }
         }
     }
+}
+
+private fun calculateMappedCoordinates(
+    touchX: Float,
+    touchY: Float,
+    containerWidth: Float,
+    containerHeight: Float,
+    imageWidth: Float,
+    imageHeight: Float
+): Pair<Float, Float>? {
+    if (containerWidth == 0f || containerHeight == 0f || imageWidth == 0f || imageHeight == 0f) return null
+
+    val containerRatio = containerWidth / containerHeight
+    val imageRatio = imageWidth / imageHeight
+
+    val visibleWidth: Float
+    val visibleHeight: Float
+    val offsetX: Float
+    val offsetY: Float
+
+    if (imageRatio > containerRatio) {
+        // La imagen choca con los bordes laterales (Letterbox arriba y abajo)
+        visibleWidth = containerWidth
+        visibleHeight = containerWidth / imageRatio
+        offsetX = 0f
+        offsetY = (containerHeight - visibleHeight) / 2f
+    } else {
+        // La imagen choca con los bordes superior/inferior (Pillarbox a los lados)
+        visibleHeight = containerHeight
+        visibleWidth = containerHeight * imageRatio
+        offsetX = (containerWidth - visibleWidth) / 2f
+        offsetY = 0f
+    }
+
+    // Descartar toques en las bandas negras (fuera del área del video)
+    if (touchX < offsetX || touchX > offsetX + visibleWidth ||
+        touchY < offsetY || touchY > offsetY + visibleHeight
+    ) {
+        return null
+    }
+
+    val clampedX = ((touchX - offsetX) / visibleWidth).coerceIn(0f, 1f)
+    val clampedY = ((touchY - offsetY) / visibleHeight).coerceIn(0f, 1f)
+
+    return Pair(clampedX, clampedY)
 }

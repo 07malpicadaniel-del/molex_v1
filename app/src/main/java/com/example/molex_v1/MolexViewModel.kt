@@ -137,7 +137,7 @@ class MolexViewModel(
                 _availableMonitors.value = monitors
                 _selectedMonitor.value = monitors.firstOrNull()
 
-                startVideoLoop()
+                startTcpVideoLoop(sanitizedProfile.host, 9091)
                 startMetricsLoop()
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -147,39 +147,45 @@ class MolexViewModel(
         }
     }
 
-    private fun startVideoLoop() {
+    private fun startTcpVideoLoop(host: String, port: Int = 9091) {
+        videoJob?.cancel() // Cancelar cualquier bucle de video anterior
         videoJob = viewModelScope.launch(Dispatchers.IO) {
-            while (isActive) {
-                try {
-                    val frameData = videoClient?.getScreenFrame(_selectedMonitor.value)
-                    if (frameData != null && frameData != "SAME_FRAME") {
-                        try {
-                            val bytes = Base64.decode(frameData, Base64.NO_WRAP)
-                            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            var socket: java.net.Socket? = null
+            var dis: java.io.DataInputStream? = null
+            try {
+                socket = java.net.Socket(host, port)
+                socket.tcpNoDelay = true
+                dis = java.io.DataInputStream(socket.getInputStream())
 
-                            if (bitmap != null) {
-                                _currentFrame.value = bitmap.asImageBitmap()
-                                _videoState.value = VideoState.Success(bitmap.asImageBitmap())
-                            } else {
-                                Log.e("MolexVideo", "Decodificación fallida. Rust envió: $frameData")
-                                _isConnected.value = false
-                                _videoState.value = VideoState.Error("Error de cámara: $frameData")
-                                break
-                            }
-                        } catch (e: IllegalArgumentException) {
-                            Log.e("MolexVideo", "Error de Linux: $frameData", e)
+                while (isActive) {
+                    val frameSize = dis.readInt()
+                    if (frameSize > 0) {
+                        val byteArray = ByteArray(frameSize)
+                        dis.readFully(byteArray)
+
+                        val bitmap = BitmapFactory.decodeByteArray(byteArray, 0, frameSize)
+                        if (bitmap != null) {
+                            _currentFrame.value = bitmap.asImageBitmap()
+                            _videoState.value = VideoState.Success(bitmap.asImageBitmap())
+                        } else {
+                            Log.e("MolexVideo", "Decodificación fallida. Tamaño de frame: $frameSize bytes")
                             _isConnected.value = false
-                            _videoState.value = VideoState.Error("Error de Linux: $frameData")
+                            _videoState.value = VideoState.Error("Error al decodificar la imagen desde el socket TCP")
                             break
                         }
                     }
-                    delay(150L)
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.e("MolexVideo", "Error en el socket TCP: ${e.message}", e)
+                _isConnected.value = false
+                _videoState.value = VideoState.Error("Error en la conexión de video: ${e.localizedMessage}")
+            } finally {
+                try {
+                    dis?.close()
+                    socket?.close()
                 } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    e.printStackTrace()
-                    _isConnected.value = false
-                    _videoState.value = VideoState.Error(e.localizedMessage ?: "Conexión perdida")
-                    break
+                    Log.e("MolexVideo", "Error al cerrar el socket TCP", e)
                 }
             }
         }
