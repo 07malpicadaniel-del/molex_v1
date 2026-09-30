@@ -5,7 +5,6 @@ import android.content.pm.ActivityInfo
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -23,21 +22,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.molex_v1.MolexViewModel
 import com.example.molex_v1.VideoState
+import com.example.molex_v1.utils.H264StreamDecoder
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 @Composable
 fun RemoteScreen(
     viewModel: MolexViewModel,
     onNavigateToDevices: () -> Unit = {}
 ) {
-    val currentFrame by viewModel.currentFrame.collectAsStateWithLifecycle()
     val videoState by viewModel.videoState.collectAsStateWithLifecycle()
     val availableMonitors by viewModel.availableMonitors.collectAsStateWithLifecycle()
     val selectedMonitor by viewModel.selectedMonitor.collectAsStateWithLifecycle()
@@ -110,78 +111,94 @@ fun RemoteScreen(
                 .fillMaxSize()
                 .background(Color.Black)
         ) {
-            // Video rendering and touch gesture capture
-            currentFrame?.let { imageBitmap ->
-                Image(
-                    bitmap = imageBitmap,
-                    contentDescription = "Remote Linux Desktop",
-                    contentScale = ContentScale.Fit, // Genera barras negras si hay disparidad
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .pointerInput(Unit) {
-                            detectDragGestures { change, _ ->
-                                val frame = viewModel.currentFrame.value ?: return@detectDragGestures
-                                val mapped = calculateMappedCoordinates(
-                                    touchX = change.position.x,
-                                    touchY = change.position.y,
-                                    containerWidth = size.width.toFloat(),
-                                    containerHeight = size.height.toFloat(),
-                                    imageWidth = frame.width.toFloat(),
-                                    imageHeight = frame.height.toFloat()
-                                )
-                                if (mapped != null) {
-                                    change.consume()
-                                    viewModel.onMouseMove(mapped.first, mapped.second)
+            val host by viewModel.activeHost.collectAsStateWithLifecycle()
+            val scope = rememberCoroutineScope()
+            var activeDecoder by remember { mutableStateOf<H264StreamDecoder?>(null) }
+
+            AndroidView(
+                factory = { ctx ->
+                    android.view.SurfaceView(ctx).apply {
+                        // 1. Evita que el fondo negro de Compose tape la superficie del video
+                        setZOrderMediaOverlay(true)
+
+                        // 2. Fija las dimensiones nativas exactas del monitor ultrawide
+                        holder.setFixedSize(2560, 1080)
+
+                        holder.addCallback(object : android.view.SurfaceHolder.Callback {
+                            override fun surfaceCreated(holder: android.view.SurfaceHolder) {
+                                val targetHost = host ?: viewModel.activeHost.value
+                                if (!targetHost.isNullOrBlank() && holder.surface.isValid) {
+                                    val decoder = H264StreamDecoder(holder.surface)
+                                    activeDecoder = decoder
+                                    scope.launch(Dispatchers.IO) {
+                                        decoder.start(targetHost, 9091)
+                                    }
                                 }
                             }
-                        }
-                        .pointerInput(Unit) {
-                            detectTapGestures(
-                                onTap = { offset ->
-                                    val frame = viewModel.currentFrame.value ?: return@detectTapGestures
-                                    val mapped = calculateMappedCoordinates(
-                                        touchX = offset.x,
-                                        touchY = offset.y,
-                                        containerWidth = size.width.toFloat(),
-                                        containerHeight = size.height.toFloat(),
-                                        imageWidth = frame.width.toFloat(),
-                                        imageHeight = frame.height.toFloat()
-                                    )
-                                    if (mapped != null) {
-                                        viewModel.onMouseClick(mapped.first, mapped.second, isRightClick = false)
-                                    }
-                                },
-                                onLongPress = { offset ->
-                                    val frame = viewModel.currentFrame.value ?: return@detectTapGestures
-                                    val mapped = calculateMappedCoordinates(
-                                        touchX = offset.x,
-                                        touchY = offset.y,
-                                        containerWidth = size.width.toFloat(),
-                                        containerHeight = size.height.toFloat(),
-                                        imageWidth = frame.width.toFloat(),
-                                        imageHeight = frame.height.toFloat()
-                                    )
-                                    if (mapped != null) {
-                                        viewModel.onMouseClick(mapped.first, mapped.second, isRightClick = true)
-                                    }
-                                }
+
+                            override fun surfaceChanged(
+                                holder: android.view.SurfaceHolder,
+                                format: Int,
+                                width: Int,
+                                height: Int
+                            ) {}
+
+                            override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {
+                                activeDecoder?.stop()
+                                activeDecoder = null
+                            }
+                        })
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, _ ->
+                            val mapped = calculateMappedCoordinates(
+                                touchX = change.position.x,
+                                touchY = change.position.y,
+                                containerWidth = size.width.toFloat(),
+                                containerHeight = size.height.toFloat(),
+                                imageWidth = 2560f,
+                                imageHeight = 1080f
                             )
+                            if (mapped != null) {
+                                change.consume()
+                                viewModel.onMouseMove(mapped.first, mapped.second)
+                            }
                         }
-                )
-            } ?: run {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "Connecting to Wayland environment...",
-                            color = MaterialTheme.colorScheme.onBackground
+                    }
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = { offset ->
+                                val mapped = calculateMappedCoordinates(
+                                    touchX = offset.x,
+                                    touchY = offset.y,
+                                    containerWidth = size.width.toFloat(),
+                                    containerHeight = size.height.toFloat(),
+                                    imageWidth = 2560f,
+                                    imageHeight = 1080f
+                                )
+                                if (mapped != null) {
+                                    viewModel.onMouseClick(mapped.first, mapped.second, isRightClick = false)
+                                }
+                            },
+                            onLongPress = { offset ->
+                                val mapped = calculateMappedCoordinates(
+                                    touchX = offset.x,
+                                    touchY = offset.y,
+                                    containerWidth = size.width.toFloat(),
+                                    containerHeight = size.height.toFloat(),
+                                    imageWidth = 2560f,
+                                    imageHeight = 1080f
+                                )
+                                if (mapped != null) {
+                                    viewModel.onMouseClick(mapped.first, mapped.second, isRightClick = true)
+                                }
+                            }
                         )
                     }
-                }
-            }
+            )
 
             // Monitor Selector Dropdown Menu (Top Center Overlay)
             Box(
@@ -348,20 +365,17 @@ private fun calculateMappedCoordinates(
     val offsetY: Float
 
     if (imageRatio > containerRatio) {
-        // La imagen choca con los bordes laterales (Letterbox arriba y abajo)
         visibleWidth = containerWidth
         visibleHeight = containerWidth / imageRatio
         offsetX = 0f
         offsetY = (containerHeight - visibleHeight) / 2f
     } else {
-        // La imagen choca con los bordes superior/inferior (Pillarbox a los lados)
         visibleHeight = containerHeight
         visibleWidth = containerHeight * imageRatio
         offsetX = (containerWidth - visibleWidth) / 2f
         offsetY = 0f
     }
 
-    // Descartar toques en las bandas negras (fuera del área del video)
     if (touchX < offsetX || touchX > offsetX + visibleWidth ||
         touchY < offsetY || touchY > offsetY + visibleHeight
     ) {

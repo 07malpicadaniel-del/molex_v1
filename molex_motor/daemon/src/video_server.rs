@@ -1,78 +1,70 @@
+use std::process::Stdio;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::process::Command;
-use tokio::sync::watch;
 
 pub async fn start_video_server(
     addr: &str,
     target_output: Arc<tokio::sync::RwLock<String>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(addr).await?;
-    println!("📺 Molex Video TCP Server transmitiendo en {}", addr);
+    println!("📺 Molex H.264 NVENC Video Server listo en {}", addr);
 
-    // Canal con capacidad para almacenar únicamente el ÚLTIMO frame capturado
-    let (tx, rx) = watch::channel::<Option<Vec<u8>>>(None);
-
-    // Tarea 1: Bucle de captura continua en memoria
-    let output_for_capture = target_output.clone();
-    tokio::spawn(async move {
-        let frame_interval = Duration::from_millis(16); // Límite ~60 FPS
-
-        loop {
-            let start = Instant::now();
-            let monitor = output_for_capture.read().await.clone();
-
-            // grim con calidad optimizada y escala 0.75 para reducir ancho de banda
-            let grim_output = Command::new("grim")
-                .args(["-t", "jpeg", "-q", "55", "-s", "0.75", "-o", &monitor, "-"])
-                .output()
-                .await;
-
-            if let Ok(out) = grim_output {
-                if out.status.success() && !out.stdout.is_empty() {
-                    // Sobrescribe el buffer; los frames no leídos se descartan en el acto
-                    let _ = tx.send(Some(out.stdout));
-                }
-            }
-
-            let elapsed = start.elapsed();
-            if elapsed < frame_interval {
-                tokio::time::sleep(frame_interval - elapsed).await;
-            }
-        }
-    });
-
-    // Tarea 2: Servidor que solo despacha el frame más fresco a la red
     loop {
         let (mut socket, peer) = listener.accept().await?;
         let _ = socket.set_nodelay(true);
-        println!("🎥 Cliente conectado: {}", peer);
+        println!("🎥 Cliente Android conectado: {}", peer);
 
-        let mut client_rx = rx.clone();
+        let output_ref = target_output.clone();
 
         tokio::spawn(async move {
-            while client_rx.changed().await.is_ok() {
-                let frame_bytes = match client_rx.borrow().as_ref() {
-                    Some(bytes) => bytes.clone(),
-                    None => continue,
-                };
+            let monitor = output_ref.read().await.clone();
 
-                let frame_len = frame_bytes.len() as u32;
+            let mut child = match Command::new("wl-screenrec")
+                .args([
+                    "--experimental-vulkan",
+                    "--low-power=off",
+                    "-o",
+                    &monitor,
+                    "--codec",
+                    "avc",
+                    "--ffmpeg-muxer",
+                    "h264",
+                    "--gop-size",
+                    "30",
+                    "--max-fps",
+                    "60",
+                    "-f",
+                    "-",
+                ])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit()) // Muestra cualquier log de wl-screenrec en la terminal
+                .kill_on_drop(true)
+                .spawn()
+            {
+                Ok(child) => child,
+                Err(e) => {
+                    eprintln!("❌ Error al iniciar wl-screenrec: {}", e);
+                    return;
+                }
+            };
 
-                // Si la red se atora, no se acumula cola; se salta al siguiente
-                if socket.write_all(&frame_len.to_be_bytes()).await.is_err() {
-                    break;
+            let mut stdout = match child.stdout.take() {
+                Some(stdout) => stdout,
+                None => {
+                    eprintln!("❌ No se pudo capturar stdout de wl-screenrec");
+                    return;
                 }
-                if socket.write_all(&frame_bytes).await.is_err() {
-                    break;
-                }
-                if socket.flush().await.is_err() {
-                    break;
-                }
+            };
+
+            let copy_result = tokio::io::copy(&mut stdout, &mut socket).await;
+
+            if let Err(e) = copy_result {
+                eprintln!("ℹ️ Conexión de video finalizada ({}): {}", peer, e);
             }
-            println!("🔌 Cliente desconectado: {}", peer);
+
+            let _ = child.kill().await;
+            println!("🔌 Sesión H.264 cerrada con {}", peer);
         });
     }
 }

@@ -1,6 +1,7 @@
 package com.example.molex_v1.ui.screens
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -67,10 +68,42 @@ fun DevicesScreen(viewModel: MolexViewModel, onDeviceSelected: () -> Unit) {
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     items(savedDevices) { profile ->
-                        DeviceCard(profile = profile, onClick = {
-                            viewModel.connectToServer(profile)
-                            onDeviceSelected()
-                        })
+                        var showDeleteDialog by remember { mutableStateOf(false) }
+
+                        DeviceCard(
+                            profile = profile.toServerProfile(), 
+                            onClick = {
+                                viewModel.connectToServer(profile.toServerProfile())
+                                onDeviceSelected()
+                            },
+                            onLongClick = {
+                                showDeleteDialog = true
+                            }
+                        )
+
+                        if (showDeleteDialog) {
+                            AlertDialog(
+                                onDismissRequest = { showDeleteDialog = false },
+                                title = { Text("Eliminar Dispositivo", color = MaterialTheme.colorScheme.onSurface) },
+                                text = { Text("¿Deseas eliminar el servidor ${profile.username}@${profile.host}?", color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                                confirmButton = {
+                                    TextButton(
+                                        onClick = {
+                                            viewModel.deleteDevice(profile)
+                                            showDeleteDialog = false
+                                        }
+                                    ) {
+                                        Text("Eliminar", color = MaterialTheme.colorScheme.error)
+                                    }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { showDeleteDialog = false }) {
+                                        Text("Cancelar", color = MaterialTheme.colorScheme.secondary)
+                                    }
+                                },
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        }
                     }
                 }
             }
@@ -97,12 +130,16 @@ fun DevicesScreen(viewModel: MolexViewModel, onDeviceSelected: () -> Unit) {
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun DeviceCard(profile: ServerProfile, onClick: () -> Unit) {
+fun DeviceCard(profile: ServerProfile, onClick: () -> Unit, onLongClick: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() },
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            ),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface

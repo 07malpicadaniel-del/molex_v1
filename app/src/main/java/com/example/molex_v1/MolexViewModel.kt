@@ -45,6 +45,9 @@ class MolexViewModel(
     private var videoJob: Job? = null
     private var metricsJob: Job? = null
 
+    private val _activeHost = MutableStateFlow<String?>(null)
+    val activeHost = _activeHost.asStateFlow()
+
     private val _isConnected = MutableStateFlow(false)
     val isConnected = _isConnected.asStateFlow()
 
@@ -68,8 +71,7 @@ class MolexViewModel(
     val selectedMonitor = _selectedMonitor.asStateFlow()
 
     // Gestión de Dispositivos persistidos con Room
-    val savedDevices: StateFlow<List<ServerProfile>> = deviceDao.getAllDevices()
-        .map { entities -> entities.map { it.toServerProfile() } }
+    val savedDevices: StateFlow<List<DeviceEntity>> = deviceDao.getAllDevices()
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -79,6 +81,12 @@ class MolexViewModel(
     fun addDevice(profile: ServerProfile) {
         viewModelScope.launch(Dispatchers.IO) {
             deviceDao.insertDevice(DeviceEntity.fromServerProfile(profile))
+        }
+    }
+
+    fun deleteDevice(device: DeviceEntity) {
+        viewModelScope.launch(Dispatchers.IO) {
+            deviceDao.deleteDevice(device)
         }
     }
 
@@ -101,6 +109,7 @@ class MolexViewModel(
         inputClient = null
 
         _isConnected.value = false
+        _activeHost.value = null
         _currentFrame.value = null
         _systemMetrics.value = null
         _availableMonitors.value = emptyList()
@@ -121,6 +130,7 @@ class MolexViewModel(
         )
 
         disconnect()
+        _activeHost.value = sanitizedProfile.host
         _videoState.value = VideoState.Loading
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -137,7 +147,6 @@ class MolexViewModel(
                 _availableMonitors.value = monitors
                 _selectedMonitor.value = monitors.firstOrNull()
 
-                startTcpVideoLoop(sanitizedProfile.host, 9091)
                 startMetricsLoop()
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -147,49 +156,8 @@ class MolexViewModel(
         }
     }
 
-    private fun startTcpVideoLoop(host: String, port: Int = 9091) {
-        videoJob?.cancel() // Cancelar cualquier bucle de video anterior
-        videoJob = viewModelScope.launch(Dispatchers.IO) {
-            var socket: java.net.Socket? = null
-            var dis: java.io.DataInputStream? = null
-            try {
-                socket = java.net.Socket(host, port)
-                socket.tcpNoDelay = true
-                dis = java.io.DataInputStream(socket.getInputStream())
-
-                while (isActive) {
-                    val frameSize = dis.readInt()
-                    if (frameSize > 0) {
-                        val byteArray = ByteArray(frameSize)
-                        dis.readFully(byteArray)
-
-                        val bitmap = BitmapFactory.decodeByteArray(byteArray, 0, frameSize)
-                        if (bitmap != null) {
-                            _currentFrame.value = bitmap.asImageBitmap()
-                            _videoState.value = VideoState.Success(bitmap.asImageBitmap())
-                        } else {
-                            Log.e("MolexVideo", "Decodificación fallida. Tamaño de frame: $frameSize bytes")
-                            _isConnected.value = false
-                            _videoState.value = VideoState.Error("Error al decodificar la imagen desde el socket TCP")
-                            break
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.e("MolexVideo", "Error en el socket TCP: ${e.message}", e)
-                _isConnected.value = false
-                _videoState.value = VideoState.Error("Error en la conexión de video: ${e.localizedMessage}")
-            } finally {
-                try {
-                    dis?.close()
-                    socket?.close()
-                } catch (e: Exception) {
-                    Log.e("MolexVideo", "Error al cerrar el socket TCP", e)
-                }
-            }
-        }
-    }
+    // El procesamiento de video ha sido migrado a H264StreamDecoder.kt
+    // y es gestionado directamente por RemoteScreen mediante SurfaceView
 
     private fun startMetricsLoop() {
         metricsJob = viewModelScope.launch(Dispatchers.IO) {
