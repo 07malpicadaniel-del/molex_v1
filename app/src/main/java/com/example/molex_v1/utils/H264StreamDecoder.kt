@@ -7,6 +7,7 @@ import android.view.Surface
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.InputStream
+import java.net.InetSocketAddress
 import java.net.Socket
 
 class H264StreamDecoder(private val surface: Surface) {
@@ -25,10 +26,27 @@ class H264StreamDecoder(private val surface: Surface) {
                 Log.e("H264StreamDecoder", "Superficie no válida al iniciar")
                 return@withContext
             }
+
+            // 1. Conexión TCP primero. Si falla, la superficie queda intacta.
+            val connectedSocket: Socket
+            val inputStream: InputStream
+            try {
+                connectedSocket = Socket().apply {
+                    tcpNoDelay = true
+                    connect(InetSocketAddress(host, port), 4000)
+                }
+                socket = connectedSocket
+                inputStream = connectedSocket.getInputStream()
+            } catch (e: Exception) {
+                Log.e("H264StreamDecoder", "No se pudo conectar al host $host:$port -> ${e.message}")
+                return@withContext
+            }
+
             isRunning = true
             try {
+                // 2. Inicialización de MediaCodec tras confirmar conexión de red
                 val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, 2560, 1080).apply {
-                    setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 1024 * 1024)
+                    setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 2 * 1024 * 1024)
                 }
 
                 val codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
@@ -36,7 +54,7 @@ class H264StreamDecoder(private val surface: Surface) {
                 codec.start()
                 decoder = codec
 
-                // Hilo de drenado: Solo renderiza a pantalla si el buffer contiene datos reales (size > 0)
+                // 3. Hilo de drenaje: solo renderiza buffers con datos reales
                 drainThread = Thread {
                     val bufferInfo = MediaCodec.BufferInfo()
                     while (isRunning) {
@@ -59,12 +77,9 @@ class H264StreamDecoder(private val surface: Surface) {
                     start()
                 }
 
-                socket = Socket(host, port).apply { tcpNoDelay = true }
-                val inputStream = socket?.getInputStream() ?: return@withContext
-
                 processStream(inputStream)
             } catch (e: Exception) {
-                Log.e("H264StreamDecoder", "Fallo al iniciar decodificador: ${e.message}", e)
+                Log.e("H264StreamDecoder", "Fallo crítico en decodificador: ${e.message}", e)
             } finally {
                 stop()
             }
@@ -72,7 +87,7 @@ class H264StreamDecoder(private val surface: Surface) {
     }
 
     private fun processStream(inputStream: InputStream) {
-        val buffer = ByteArray(2 * 1024 * 1024) // 2MB
+        val buffer = ByteArray(2 * 1024 * 1024)
         var bufferLength = 0
         var hasSps = false
         var hasPps = false
@@ -125,7 +140,6 @@ class H264StreamDecoder(private val surface: Surface) {
 
                         val nalType = nalData[startCodeSize].toInt() and 0x1F
 
-                        // Protocolo de seguridad: No alimentar P-Frames sin SPS/PPS ni primer Keyframe
                         if (nalType == 7) {
                             hasSps = true
                             feedDecoder(nalData, isConfig = true)
@@ -134,7 +148,7 @@ class H264StreamDecoder(private val surface: Surface) {
                             feedDecoder(nalData, isConfig = true)
                         } else if (hasSps && hasPps) {
                             if (isWaitingForKeyframe) {
-                                if (nalType == 5) { // IDR Keyframe inicial
+                                if (nalType == 5) {
                                     isWaitingForKeyframe = false
                                     feedDecoder(nalData, isConfig = false)
                                 }
@@ -157,7 +171,6 @@ class H264StreamDecoder(private val surface: Surface) {
                 System.arraycopy(buffer, offset, buffer, 0, remaining)
                 bufferLength = remaining
             } else if (bufferLength == buffer.size) {
-                // Evita interbloqueos si se llena el buffer sin delimitar
                 bufferLength = 0
             }
         }

@@ -35,10 +35,10 @@ pub async fn start_video_server(
                     "--max-fps",
                     "60",
                     "-f",
-                    "-",
+                    "/dev/stdout",
                 ])
                 .stdout(Stdio::piped())
-                .stderr(Stdio::inherit()) // Muestra cualquier log de wl-screenrec en la terminal
+                .stderr(Stdio::inherit())
                 .kill_on_drop(true)
                 .spawn()
             {

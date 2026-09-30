@@ -31,7 +31,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.molex_v1.MolexViewModel
 import com.example.molex_v1.VideoState
 import com.example.molex_v1.utils.H264StreamDecoder
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 @Composable
@@ -111,29 +111,34 @@ fun RemoteScreen(
                 .fillMaxSize()
                 .background(Color.Black)
         ) {
+            var currentSurface by remember { mutableStateOf<android.view.Surface?>(null) }
             val host by viewModel.activeHost.collectAsStateWithLifecycle()
-            val scope = rememberCoroutineScope()
-            var activeDecoder by remember { mutableStateOf<H264StreamDecoder?>(null) }
+
+            LaunchedEffect(host, currentSurface) {
+                val targetHost = host
+                val surface = currentSurface
+                if (!targetHost.isNullOrBlank() && surface != null && surface.isValid) {
+                    while (isActive && surface.isValid) {
+                        val decoder = H264StreamDecoder(surface)
+                        try {
+                            decoder.start(targetHost, 9091)
+                        } finally {
+                            decoder.stop()
+                        }
+                        if (!isActive || !surface.isValid) break
+                        kotlinx.coroutines.delay(2000L)
+                    }
+                }
+            }
 
             AndroidView(
                 factory = { ctx ->
                     android.view.SurfaceView(ctx).apply {
-                        // 1. Evita que el fondo negro de Compose tape la superficie del video
                         setZOrderMediaOverlay(true)
-
-                        // 2. Fija las dimensiones nativas exactas del monitor ultrawide
                         holder.setFixedSize(2560, 1080)
-
                         holder.addCallback(object : android.view.SurfaceHolder.Callback {
                             override fun surfaceCreated(holder: android.view.SurfaceHolder) {
-                                val targetHost = host ?: viewModel.activeHost.value
-                                if (!targetHost.isNullOrBlank() && holder.surface.isValid) {
-                                    val decoder = H264StreamDecoder(holder.surface)
-                                    activeDecoder = decoder
-                                    scope.launch(Dispatchers.IO) {
-                                        decoder.start(targetHost, 9091)
-                                    }
-                                }
+                                currentSurface = holder.surface
                             }
 
                             override fun surfaceChanged(
@@ -144,8 +149,7 @@ fun RemoteScreen(
                             ) {}
 
                             override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {
-                                activeDecoder?.stop()
-                                activeDecoder = null
+                                currentSurface = null
                             }
                         })
                     }
