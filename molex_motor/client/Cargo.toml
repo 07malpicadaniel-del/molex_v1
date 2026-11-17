@@ -1,22 +1,36 @@
 [package]
 name = "client"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+name = "client"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[features]
+default = ["uniffi-bindings"]
+uniffi-bindings = ["dep:uniffi"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["uniffi-bindings"]
 
 [dependencies]
-# Puente FFI para cuando lo necesitemos en Android
-uniffi = { version = "0.28.3", features = ["cli"] }
+# Puente FFI opcional para compilación Android (UniFFI)
+uniffi = { version = "0.28.3", features = ["cli"], optional = true }
 
-# Asincronía
+# Asincronía y utilidades de red
 tokio = { version = "1.38", features = ["full"] }
 async-trait = "0.1"
 
-# SSH para video y métricas
+# SSH para consola, métricas y descubrimiento de monitores
 russh = "0.44.1"
 russh-keys = "0.44.0"
+
+# Serialización para Tauri, Tailscale JSON y persistencia
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 # Manejo de errores
 thiserror = "1.0"

@@ -1,0 +1,15 @@
+#!/bin/sh
+# /etc/local.d/wol.start — Habilita Wake-on-LAN (Magic Packet, flag g) en interfaces Ethernet (Gentoo OpenRC)
+for iface_path in /sys/class/net/*; do
+    name="$(basename "$iface_path")"
+    case "$name" in
+        lo|tailscale*|docker*|virbr*|veth*|br*) continue ;;
+    esac
+    # Ignorar interfaces Wi-Fi
+    if [ -d "$iface_path/wireless" ]; then
+        continue
+    fi
+    if command -v ethtool >/dev/null 2>&1; then
+        ethtool -s "$name" wol g 2>/dev/null || true
+    fi
+done

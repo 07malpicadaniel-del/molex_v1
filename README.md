@@ -1,29 +1,63 @@
-# Molex v1
+# Molex v1 / v2 Desktop (PC-to-PC + Android)
 
-Molex is an ultra-low latency remote desktop platform specifically designed for controlling Linux Wayland environments (Sway, Hyprland, GNOME) from an Android device.
+Molex is an ultra-low latency remote desktop platform designed for controlling Linux Wayland environments (**Hyprland**, **Niri**, Sway, GNOME) across both **PC-to-PC (Tauri v2 Desktop)** and **Android (Jetpack Compose via UniFFI)**.
 
-By leveraging a hybrid Rust/Kotlin architecture, Molex achieves high performance, minimal CPU overhead, and responsive user interaction inspired by game-streaming platforms like Moonlight.
+By leveraging a dual-architecture Rust engine (`molex_motor/`), Molex delivers hardware-encoded H.264 streaming over TCP (`9091`), kernel-level input injection (`uinput` over UDP `9090`), persistent SSH shell/telemetry (`22`), **Tailscale Mesh VPN** management, and **Wake-on-LAN (WoL)**.
 
 ---
 
 ## 🏗️ Monorepo Architecture
 
-The repository is structured as a monorepo consisting of two core components:
-
 ```
 molex_v1/
-├── molex_motor/               # Rust Native Backend
-│   ├── client/                # SSH & FFI Client bindings (UniFFI)
-│   │   ├── src/               # Modularized Rust code
-│   │   │   ├── lib.rs         # UniFFI interface exports & library entry point
-│   │   │   ├── models.rs      # Data structures, exceptions, & FFI types
-│   │   │   ├── wm.rs          # Wayland / Hyprland compositor logic & capture
-│   │   │   └── ssh_video.rs   # SSH session management & FFI client implementation
-│   │   └── bindings/          # Auto-generated Kotlin FFI bindings (.so)
-│   └── daemon/                # Linux Daemon for kernel-level input injection (uinput)
+├── molex_motor/               # Rust Native Engine Workspace
+│   ├── client/                # Shared Core Library (`molex_core` / UniFFI `client`)
+│   │   ├── src/
+│   │   │   ├── lib.rs         # Optional `uniffi-bindings` feature gating
+│   │   │   ├── models.rs      # DeviceProfile (LAN/Tailscale/WoL), MonitorInfo, Metrics
+│   │   │   ├── shell.rs       # Persistent `current_dir` SSH command wrapper & ANSI strip
+│   │   │   ├── ssh_video.rs   # Async + UniFFI SSH session & telemetry client
+│   │   │   ├── wm.rs          # Multi-compositor Wayland detection (Hyprland, Niri, wlr-randr)
+│   │   │   ├── udp_input.rs   # Ultra-low-latency UDP input sender (`M:`, `C:`, `W:`, `K:`)
+│   │   │   ├── tunnel.rs      # Tailscale CLI integration (`status --json`, `up`/`down`)
+│   │   │   └── wol.rs         # 102-byte Magic Packet sender & WoL+Tailscale readiness poll
+│   └── daemon/                # Host Linux Daemon (`molex_daemon`)
+│       └── src/
+│           ├── monitor.rs     # Hyprland / Niri / wlr-randr monitor auto-detection
+│           ├── video_server.rs# TCP :9091 `wl-screenrec` H.264 streamer (`TCP_NODELAY`)
+│           ├── udp_server.rs  # UDP :9090 FIFO input dispatcher + dynamic monitor switch
+│           └── virtual_device.rs # `evdev::uinput` pointer, wheel & full 1..=255 keyboard
+├── src-tauri/                 # Tauri v2 Desktop Rust Backend (`molex_desktop`)
+│   └── src/
+│       ├── lib.rs             # Tauri IPC commands & state management
+│       ├── video_decoder.rs   # FFmpeg low-delay H.264 decoder -> local binary WebSocket
+│       └── storage.rs         # Persistent device & desktop settings (`~/.config/molex`)
+├── src/                       # Desktop Frontend (React + TypeScript + Tailwind + WebGL YUV)
+├── scripts/                   # Boot & Wayland session setup for Arch (systemd) & Gentoo (OpenRC)
 └── app/                       # Android Frontend (Kotlin & Jetpack Compose)
-    └── src/main/java/...      # UI Screens, Navigation & MolexViewModel
 ```
+
+---
+
+## 🖥️ PC-to-PC Desktop Quick Start (Tauri v2)
+
+### Build & Run Desktop Client
+```bash
+npm install
+npm run build
+cargo build --manifest-path src-tauri/Cargo.toml
+# Or run dev mode:
+npm run tauri dev
+```
+
+### Build & Install Host Daemon (`molex_daemon`)
+```bash
+cargo build --manifest-path molex_motor/Cargo.toml -p molex_daemon --release
+install -Dm755 molex_motor/target/release/molex_daemon ~/.local/bin/molex_daemon
+```
+See [scripts/README.md](scripts/README.md) for **Arch Linux (systemd)** and **Gentoo Linux (OpenRC)** boot/WoL/Wayland autostart setup.
+
+---
 
 ### 1. Backend (Rust Motor)
 - **`client` submodule**: Compiles to a dynamic library (`libclient.so`) using `UniFFI` bindings for Android JNI integration:

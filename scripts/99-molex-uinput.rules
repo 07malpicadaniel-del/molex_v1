@@ -1,0 +1,2 @@
+# Permite a los usuarios del grupo `input` crear dispositivos virtuales uinput sin ejecutar molex_daemon como root.
+KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", MODE="0660", GROUP="input", TAG+="uaccess"

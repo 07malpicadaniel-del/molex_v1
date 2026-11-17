@@ -1,0 +1,16 @@
+[Unit]
+Description=Molex Host Daemon (H.264 Wayland Streaming & uinput Input Server)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+Environment="PATH=%h/.cargo/bin:/usr/local/bin:/usr/bin"
+Environment="RUST_BACKTRACE=1"
+PassEnvironment=WAYLAND_DISPLAY XDG_RUNTIME_DIR NIRI_SOCKET HYPRLAND_INSTANCE_SIGNATURE
+ExecStart=/usr/local/bin/molex-host-up
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
