@@ -44,11 +44,16 @@ Configura:
 ```bash
 chmod +x scripts/setup-gentoo-host.sh
 ./scripts/setup-gentoo-host.sh
+# Opcional: habilitar clamping TCP MSS (--clamp-mss-to-pmtu) para tailscale0 (MTU 1280)
+./scripts/setup-gentoo-host.sh --clamp-mss
 ```
 
 Configura:
+- Añade al usuario a los grupos `input`, `video` y `render` para acceso a `/dev/uinput` y `/dev/dri/renderD*`.
+- Si detecta iGPU Intel (`0x8086`), instala `media-libs/libva-intel-media-driver` (driver VA-API `iHD`).
 - Añade `tailscaled`, `sshd` y `local` al runlevel `default` de OpenRC (`rc-update add ... default`) y aplica `tailscale set --operator=$USER`.
 - Instala `/etc/local.d/wol.start` (`0755`) para habilitar `ethtool -s <interfaz_ethernet> wol g` en cada arranque.
+- Con `--clamp-mss`, instala `/etc/local.d/90-molex-mss.start` para aplicar `iptables -t mangle -A POSTROUTING -o tailscale0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu` (evita bloqueos de paquetes grandes cuando Tailscale MTU 1280 convive con Wi-Fi/Docker).
 - Genera los hooks de autostart para **Niri** (`spawn-at-startup "molex-host-up"`) y **Hyprland** (`exec-once = molex-host-up`).
 
 ---

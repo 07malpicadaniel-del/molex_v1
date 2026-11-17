@@ -46,7 +46,7 @@ run_as_root install -Dm644 "$SCRIPT_DIR/molex-uinput.conf" /etc/modules-load.d/m
 run_as_root install -Dm644 "$SCRIPT_DIR/99-molex-uinput.rules" /etc/udev/rules.d/99-molex-uinput.rules
 run_as_root udevadm control --reload-rules
 run_as_root udevadm trigger /dev/uinput || true
-run_as_root usermod -aG input "$TARGET_USER"
+run_as_root usermod -aG input,video,render "$TARGET_USER"
 
 # 4. Habilitar tailscaled y sshd en el arranque (antes del login)
 run_as_root systemctl enable --now tailscaled.service

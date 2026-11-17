@@ -57,12 +57,22 @@ if command -v udevadm >/dev/null 2>&1; then
     run_as_root udevadm control --reload-rules
     run_as_root udevadm trigger /dev/uinput || true
 fi
-if getent group input >/dev/null 2>&1; then
-    if command -v usermod >/dev/null 2>&1; then
-        run_as_root usermod -aG input "$TARGET_USER" || true
-    elif command -v gpasswd >/dev/null 2>&1; then
-        run_as_root gpasswd -a "$TARGET_USER" input || true
+if command -v usermod >/dev/null 2>&1; then
+    EXISTING_GROUPS=""
+    for grp in input video render; do
+        if getent group "$grp" >/dev/null 2>&1; then
+            EXISTING_GROUPS="${EXISTING_GROUPS:+${EXISTING_GROUPS},}${grp}"
+        fi
+    done
+    if [[ -n "$EXISTING_GROUPS" ]]; then
+        run_as_root usermod -aG "$EXISTING_GROUPS" "$TARGET_USER" || true
     fi
+elif command -v gpasswd >/dev/null 2>&1; then
+    for grp in input video render; do
+        if getent group "$grp" >/dev/null 2>&1; then
+            run_as_root gpasswd -a "$TARGET_USER" "$grp" || true
+        fi
+    done
 fi
 
 echo "==> Generando wrapper /usr/local/bin/molex-host-up..."
@@ -154,6 +164,17 @@ ensure_service_running sshd
 
 if ! command -v wl-screenrec >/dev/null 2>&1; then
     echo "⚠️  Advertencia: no se encontró 'wl-screenrec' en PATH ($PATH)." >&2
+fi
+
+# Autoconfigurar LIBVA_DRIVER_NAME=iHD si existe iGPU Intel en renderD128 y no hay override
+if [[ -z "${LIBVA_DRIVER_NAME:-}" && -r /sys/class/drm/renderD128/device/vendor ]]; then
+    if grep -qi '^0x8086$' /sys/class/drm/renderD128/device/vendor 2>/dev/null; then
+        export LIBVA_DRIVER_NAME="iHD"
+    fi
+fi
+
+if [[ -e /dev/dri/renderD128 ]] && [[ ! -r /dev/dri/renderD128 || ! -w /dev/dri/renderD128 ]]; then
+    echo "⚠️  Sin permisos RW en /dev/dri/renderD128 para $(id -un); verifica pertenecer a los grupos 'video' y 'render'." >&2
 fi
 
 # Evitar instancias duplicadas si el compositor recarga su configuración

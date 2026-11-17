@@ -229,19 +229,51 @@ export const RemoteScreen: React.FC<RemoteScreenProps> = ({
       {/* Connecting / Error Non-Blocking Banner */}
       {stats && !stats.connected && (
         <div className="pointer-events-auto absolute inset-0 flex items-center justify-center bg-black/75 backdrop-blur-sm">
-          <div className="max-w-md rounded-2xl border border-molex-variant bg-molex-surface p-6 text-center shadow-2xl">
-            <AlertTriangle className="mx-auto h-10 w-10 text-amber-400" />
+          <div
+            className={`max-w-lg rounded-2xl border bg-molex-surface p-6 text-center shadow-2xl ${
+              !stats.active && stats.error?.includes("0 bytes")
+                ? "border-red-500/50"
+                : "border-molex-variant"
+            }`}
+          >
+            <AlertTriangle
+              className={`mx-auto h-10 w-10 ${
+                !stats.active && stats.error?.includes("0 bytes")
+                  ? "text-red-400"
+                  : "text-amber-400"
+              }`}
+            />
             <h3 className="mt-3 text-base font-bold text-molex-text">
-              Esperando stream H.264 en {activeHost}:{activeDevice.video_port}
+              {!stats.active && stats.error?.includes("0 bytes")
+                ? `Stream H.264 detenido en ${activeHost}:${activeDevice.video_port}`
+                : `Esperando stream H.264 en ${activeHost}:${activeDevice.video_port}`}
             </h3>
-            <p className="mt-1.5 text-xs text-molex-muted">
+            <p
+              className={`mt-1.5 text-xs ${
+                !stats.active && stats.error?.includes("0 bytes")
+                  ? "text-red-200"
+                  : "text-molex-muted"
+              }`}
+            >
               {stats.error ||
                 "Conectando al socket TCP de wl-screenrec en molex_daemon..."}
             </p>
+            {!stats.active && stats.error?.includes("0 bytes") && (
+              <p className="mt-2.5 rounded-lg border border-molex-variant bg-molex-bg/80 px-3 py-2 text-left font-mono text-[11px] text-molex-muted">
+                Verifica en el host: permisos de grupos <span className="text-molex-light">video,render</span> en{" "}
+                <span className="text-molex-light">/dev/dri/renderD128</span>, driver{" "}
+                <span className="text-molex-light">LIBVA_DRIVER_NAME=iHD</span> o la salida de{" "}
+                <span className="text-molex-light">molex_daemon</span> en Terminal SSH.
+              </p>
+            )}
             <div className="mt-5 flex flex-wrap justify-center gap-2.5">
               <button
                 type="button"
-                onClick={() => molexApi.restartVideoStream()}
+                onClick={async () => {
+                  await molexApi.restartVideoStream();
+                  const st = await molexApi.getStreamStats().catch(() => null);
+                  if (st) setStats(st);
+                }}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-molex-accent px-4 py-2 text-xs font-semibold text-molex-bg hover:bg-molex-light"
               >
                 <RefreshCw className="h-3.5 w-3.5" />

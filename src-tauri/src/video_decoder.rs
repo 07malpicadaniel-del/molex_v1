@@ -333,6 +333,12 @@ fn pack_yuv420p_packet(
     out
 }
 
+#[derive(Debug)]
+enum StreamSessionError {
+    ImmediateZeroBytesEof,
+    Other { message: String, received_bytes: usize },
+}
+
 fn run_stream_loop(
     host: String,
     port: u16,
@@ -342,6 +348,31 @@ fn run_stream_loop(
     frame_seq_tx: watch::Sender<u64>,
     stats_ref: Arc<Mutex<StreamStats>>,
 ) {
+    run_stream_loop_with_delay(
+        host,
+        port,
+        decoder_threads,
+        running,
+        latest_frame,
+        frame_seq_tx,
+        stats_ref,
+        Duration::from_millis(1500),
+    );
+}
+
+fn run_stream_loop_with_delay(
+    host: String,
+    port: u16,
+    decoder_threads: u32,
+    running: Arc<AtomicBool>,
+    latest_frame: Arc<Mutex<Option<Arc<Vec<u8>>>>>,
+    frame_seq_tx: watch::Sender<u64>,
+    stats_ref: Arc<Mutex<StreamStats>>,
+    retry_delay: Duration,
+) {
+    const MAX_ZERO_BYTE_FAILURES: u32 = 3;
+    let mut zero_byte_failures: u32 = 0;
+
     while running.load(Ordering::Relaxed) {
         match connect_tcp_with_timeout(&host, port, Duration::from_secs(4)) {
             Ok(mut tcp) => {
@@ -350,7 +381,7 @@ fn run_stream_loop(
                     s.error = None;
                 }
 
-                if let Err(err) = decode_tcp_h264_session(
+                match decode_tcp_h264_session(
                     &mut tcp,
                     decoder_threads,
                     &running,
@@ -358,10 +389,44 @@ fn run_stream_loop(
                     &frame_seq_tx,
                     &stats_ref,
                 ) {
-                    if running.load(Ordering::Relaxed) {
-                        if let Ok(mut s) = stats_ref.lock() {
-                            s.connected = false;
-                            s.error = Some(err);
+                    Ok(()) => {
+                        zero_byte_failures = 0;
+                    }
+                    Err(StreamSessionError::ImmediateZeroBytesEof) => {
+                        zero_byte_failures += 1;
+                        if zero_byte_failures >= MAX_ZERO_BYTE_FAILURES {
+                            if let Ok(mut s) = stats_ref.lock() {
+                                s.active = false;
+                                s.connected = false;
+                                s.error = Some(
+                                    "El servidor cerró el stream con 0 bytes (posible fallo de codificador VA-API/NVENC en el host)"
+                                        .to_string(),
+                                );
+                            }
+                            break;
+                        }
+                        if running.load(Ordering::Relaxed) {
+                            if let Ok(mut s) = stats_ref.lock() {
+                                s.connected = false;
+                                s.error = Some(format!(
+                                    "El servidor cerró el stream con 0 bytes (intento {}/{})",
+                                    zero_byte_failures, MAX_ZERO_BYTE_FAILURES
+                                ));
+                            }
+                        }
+                    }
+                    Err(StreamSessionError::Other {
+                        message,
+                        received_bytes,
+                    }) => {
+                        if received_bytes > 0 {
+                            zero_byte_failures = 0;
+                        }
+                        if running.load(Ordering::Relaxed) {
+                            if let Ok(mut s) = stats_ref.lock() {
+                                s.connected = false;
+                                s.error = Some(message);
+                            }
                         }
                     }
                 }
@@ -375,11 +440,15 @@ fn run_stream_loop(
         }
 
         // Reintento controlado si la sesión sigue activa
-        for _ in 0..10 {
+        let step = Duration::from_millis(50);
+        let mut waited = Duration::ZERO;
+        while waited < retry_delay {
             if !running.load(Ordering::Relaxed) {
                 return;
             }
-            std::thread::sleep(Duration::from_millis(150));
+            let chunk = (retry_delay - waited).min(step);
+            std::thread::sleep(chunk);
+            waited += chunk;
         }
     }
 }
@@ -391,9 +460,11 @@ fn decode_tcp_h264_session(
     latest_frame: &Arc<Mutex<Option<Arc<Vec<u8>>>>>,
     frame_seq_tx: &watch::Sender<u64>,
     stats_ref: &Arc<Mutex<StreamStats>>,
-) -> Result<(), String> {
-    let codec = codec::decoder::find(Id::H264)
-        .ok_or_else(|| "No se encontró el decodificador H.264 en libavcodec".to_string())?;
+) -> Result<(), StreamSessionError> {
+    let codec = codec::decoder::find(Id::H264).ok_or_else(|| StreamSessionError::Other {
+        message: "No se encontró el decodificador H.264 en libavcodec".to_string(),
+        received_bytes: 0,
+    })?;
 
     let mut ctx = codec::context::Context::new_with_codec(codec);
     unsafe {
@@ -403,12 +474,15 @@ fn decode_tcp_h264_session(
         (*raw_ctx).thread_type = ffi::FF_THREAD_SLICE as i32;
     }
 
-    let mut decoder = ctx
-        .decoder()
-        .video()
-        .map_err(|e| format!("Error abriendo decodificador H.264: {}", e))?;
+    let mut decoder = ctx.decoder().video().map_err(|e| StreamSessionError::Other {
+        message: format!("Error abriendo decodificador H.264: {}", e),
+        received_bytes: 0,
+    })?;
 
-    let parser = ParserGuard::new_h264()?;
+    let parser = ParserGuard::new_h264().map_err(|message| StreamSessionError::Other {
+        message,
+        received_bytes: 0,
+    })?;
     let mut decoded_frame = VideoFrame::empty();
     let mut yuv_frame = VideoFrame::empty();
     let mut scaler: Option<(ScalerContext, u32, u32, Pixel)> = None;
@@ -419,10 +493,19 @@ fn decode_tcp_h264_session(
     let mut fps_window_start = Instant::now();
     let mut fps_frames = 0u32;
     let mut bytes_window = 0usize;
+    let mut total_bytes_read = 0usize;
 
     while running.load(Ordering::Relaxed) {
         let n = match tcp.read(&mut read_buf) {
-            Ok(0) => return Err("El servidor cerró el stream de video".into()),
+            Ok(0) => {
+                if total_bytes_read == 0 {
+                    return Err(StreamSessionError::ImmediateZeroBytesEof);
+                }
+                return Err(StreamSessionError::Other {
+                    message: "El servidor cerró el stream de video".into(),
+                    received_bytes: total_bytes_read,
+                });
+            }
             Ok(n) => n,
             Err(ref e)
                 if e.kind() == std::io::ErrorKind::WouldBlock
@@ -430,9 +513,15 @@ fn decode_tcp_h264_session(
             {
                 continue;
             }
-            Err(e) => return Err(format!("Error leyendo stream H.264: {}", e)),
+            Err(e) => {
+                return Err(StreamSessionError::Other {
+                    message: format!("Error leyendo stream H.264: {}", e),
+                    received_bytes: total_bytes_read,
+                });
+            }
         };
 
+        total_bytes_read += n;
         bytes_window += n;
         let mut offset = 0usize;
 
@@ -455,7 +544,10 @@ fn decode_tcp_h264_session(
             };
 
             if consumed < 0 {
-                return Err("Error interno en av_parser_parse2".into());
+                return Err(StreamSessionError::Other {
+                    message: "Error interno en av_parser_parse2".into(),
+                    received_bytes: total_bytes_read,
+                });
             }
             offset += consumed as usize;
 
@@ -491,12 +583,19 @@ fn decode_tcp_h264_session(
                                     h,
                                     ScalerFlags::FAST_BILINEAR,
                                 )
-                                .map_err(|e| format!("Error creando sws_scale: {}", e))?;
+                                .map_err(|e| StreamSessionError::Other {
+                                    message: format!("Error creando sws_scale: {}", e),
+                                    received_bytes: total_bytes_read,
+                                })?;
                                 scaler = Some((sc, w, h, fmt));
                             }
                             if let Some((ref mut sc, _, _, _)) = scaler {
-                                sc.run(&decoded_frame, &mut yuv_frame)
-                                    .map_err(|e| format!("Error convirtiendo pixel format: {}", e))?;
+                                sc.run(&decoded_frame, &mut yuv_frame).map_err(|e| {
+                                    StreamSessionError::Other {
+                                        message: format!("Error convirtiendo pixel format: {}", e),
+                                        received_bytes: total_bytes_read,
+                                    }
+                                })?;
                             }
                             &yuv_frame
                         };
@@ -615,5 +714,46 @@ mod tests {
         assert_eq!(u32::from_le_bytes(packet[4..8].try_into().unwrap()), 64);
         assert_eq!(u32::from_le_bytes(packet[8..12].try_into().unwrap()), 64);
         assert_eq!(packet.len(), 24 + 64 * 64 + 32 * 32 + 32 * 32);
+    }
+
+    #[test]
+    fn stops_retrying_after_three_immediate_zero_byte_eofs() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            for _ in 0..3 {
+                if let Ok((conn, _)) = listener.accept() {
+                    drop(conn);
+                }
+            }
+        });
+
+        let running = Arc::new(AtomicBool::new(true));
+        let latest_frame = Arc::new(Mutex::new(None));
+        let (seq_tx, _seq_rx) = watch::channel(0u64);
+        let stats = Arc::new(Mutex::new(StreamStats {
+            active: true,
+            ..Default::default()
+        }));
+
+        run_stream_loop_with_delay(
+            "127.0.0.1".to_string(),
+            port,
+            2,
+            running.clone(),
+            latest_frame,
+            seq_tx,
+            stats.clone(),
+            Duration::from_millis(20),
+        );
+        let _ = server.join();
+
+        let final_stats = stats.lock().unwrap().clone();
+        assert!(!final_stats.active);
+        assert!(!final_stats.connected);
+        assert_eq!(
+            final_stats.error.as_deref(),
+            Some("El servidor cerró el stream con 0 bytes (posible fallo de codificador VA-API/NVENC en el host)")
+        );
     }
 }
