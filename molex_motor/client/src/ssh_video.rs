@@ -439,6 +439,60 @@ impl MolexVideoClient {
     pub async fn get_monitors_detailed_async(&self) -> Result<Vec<MonitorInfo>, MolexError> {
         self.fetch_monitors_detailed_internal().await
     }
+
+    pub async fn detect_remote_mac_async(&self) -> Result<String, MolexError> {
+        let cmd = concat!(
+            "for iface in $(ip -o link show | awk -F': ' '!/lo|tailscale|docker|br-|veth|wlan|wlp/ {print $2}' | cut -d'@' -f1); do ",
+            "  if [ -r \"/sys/class/net/$iface/address\" ]; then ",
+            "    mac=$(tr -d ' \\n\\r' < \"/sys/class/net/$iface/address\"); ",
+            "    echo \"$iface|$mac\"; ",
+            "  fi; ",
+            "done"
+        );
+        let raw = self.run_command(cmd).await?;
+        let clean = strip_ansi_codes(&raw);
+        select_best_mac_from_interfaces(&clean).ok_or_else(|| {
+            MolexError::Generic(
+                "No se detectó una interfaz física con dirección MAC Ethernet válida en el host remoto".into(),
+            )
+        })
+    }
+}
+
+pub fn select_best_mac_from_interfaces(raw: &str) -> Option<String> {
+    let mut candidates: Vec<(u8, String)> = Vec::new();
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        let Some((iface, mac_raw)) = trimmed.split_once('|') else {
+            continue;
+        };
+        let iface_name = iface.trim().to_ascii_lowercase();
+        let mac_clean = mac_raw.trim();
+        let Ok(bytes) = crate::wol::parse_mac_address(mac_clean) else {
+            continue;
+        };
+        if bytes == [0, 0, 0, 0, 0, 0] || bytes == [0xff, 0xff, 0xff, 0xff, 0xff, 0xff] {
+            continue;
+        }
+        let formatted = format!(
+            "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]
+        );
+        let priority = if iface_name.starts_with("enp")
+            || iface_name.starts_with("eth")
+            || iface_name.starts_with("eno")
+            || iface_name.starts_with("ens")
+        {
+            0
+        } else {
+            1
+        };
+        candidates.push((priority, formatted));
+    }
+
+    candidates.sort_by_key(|(prio, _)| *prio);
+    candidates.into_iter().next().map(|(_, mac)| mac)
 }
 
 // Bloque de exportación FFI condicional para Android (UniFFI)
@@ -468,5 +522,27 @@ impl MolexVideoClient {
 
     pub fn get_monitors(&self) -> Result<Vec<String>, MolexError> {
         get_rt().block_on(self.fetch_monitors_internal())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prioritizes_wired_ethernet_mac_over_other_interfaces() {
+        let sample = "usb0|00:00:00:00:00:00\nvirbr0|52:54:00:12:34:56\nenp8s0|74:56:3c:ab:cd:ef\n";
+        assert_eq!(
+            select_best_mac_from_interfaces(sample),
+            Some("74:56:3C:AB:CD:EF".to_string())
+        );
+
+        let fallback = "eth0|aa:bb:cc:11:22:33\n";
+        assert_eq!(
+            select_best_mac_from_interfaces(fallback),
+            Some("AA:BB:CC:11:22:33".to_string())
+        );
+
+        assert_eq!(select_best_mac_from_interfaces("lo|00:00:00:00:00:00\n"), None);
     }
 }

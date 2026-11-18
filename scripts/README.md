@@ -65,3 +65,20 @@ Puertos utilizados por Molex en LAN y/o interfaz `tailscale0`:
 - `9090/udp`: Input virtual `uinput` (ratón, rueda y teclado completo)
 - `9091/tcp`: Stream continuo H.264 por hardware (`wl-screenrec`)
 - `9/udp`: Wake-on-LAN Magic Packet
+
+---
+
+## 5. Despliegue Rápido en una Laptop Nueva (Cliente y Host)
+
+### Como Cliente (sin compilar Node.js ni Rust)
+1. **Instalar Tailscale y dependencias runtime de WebView/FFmpeg:**
+   - **Arch Linux:** `sudo pacman -S tailscale webkit2gtk-4.1 ffmpeg && sudo systemctl enable --now tailscaled && sudo tailscale up --operator=$USER`
+   - **Gentoo Linux:** `sudo emerge -av net-vpn/tailscale net-libs/webkit-gtk media-video/ffmpeg && sudo rc-update add tailscaled default && sudo rc-service tailscaled start && sudo tailscale up --operator=$USER`
+   - **Debian / Ubuntu:** `curl -fsSL https://tailscale.com/install.sh | sh && sudo apt install -y libwebkit2gtk-4.1-0 ffmpeg && sudo tailscale up --operator=$USER`
+2. **Copiar y ejecutar** el binario `molex-desktop` (o `.AppImage`): `chmod +x ./molex-desktop && ./molex-desktop`.
+3. En **Dispositivos**, pulsa **+ Guardar** sobre el nodo de tu workstation en **Nodos detectados en Tailnet**, ingresa usuario SSH y pulsa **Conectar** (o **Detectar MAC por SSH** / **Encender PC**; si estás fuera de la LAN, configura **Relay WoL por SSH**).
+
+### Como Host (para controlar la laptop remotamente)
+- **Arch Linux:** `./scripts/install-host-daemon.sh && ./scripts/setup-arch-host.sh`
+- **Gentoo Linux:** `./scripts/install-host-daemon.sh && ./scripts/setup-gentoo-host.sh`
+- **Debian / Ubuntu:** instala `openssh-server`, `ethtool`, `wl-screenrec` (en `~/.cargo/bin`) y ejecuta `./scripts/install-host-daemon.sh`, habilita `ssh` y `tailscaled` (`sudo systemctl enable --now ssh tailscaled && sudo tailscale set --operator=$USER`) y lanza `molex-host-up` en tu compositor Wayland.

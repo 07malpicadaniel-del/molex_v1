@@ -5,11 +5,17 @@ export interface DeviceProfile {
   tailscale_ip: string | null;
   mac_address: string | null;
   broadcast_ip: string | null;
+  wol_relay_host: string | null;
   ssh_port: number;
   video_port: number;
   input_port: number;
   username: string;
   password: string | null;
+}
+
+export interface MacDetectedEvent {
+  device_id: string;
+  mac_address: string;
 }
 
 export interface MonitorInfo {

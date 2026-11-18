@@ -66,18 +66,34 @@ export function App() {
     molexApi.getSettings().then(setSettings).catch(console.error);
     refreshTailscale();
 
-    let unlisten: (() => void) | null = null;
+    let unlistenWake: (() => void) | null = null;
+    let unlistenMac: (() => void) | null = null;
     molexApi
       .onWakeProgress((progress) => {
         setWakingDevices((prev) => ({ ...prev, [progress.device_id]: progress }));
       })
       .then((fn) => {
-        unlisten = fn;
+        unlistenWake = fn;
+      })
+      .catch(console.error);
+
+    molexApi
+      .onMacDetected(({ device_id, mac_address }) => {
+        setDevices((prev) =>
+          prev.map((d) => (d.id === device_id ? { ...d, mac_address } : d))
+        );
+        setActiveDevice((prev) =>
+          prev && prev.id === device_id ? { ...prev, mac_address } : prev
+        );
+      })
+      .then((fn) => {
+        unlistenMac = fn;
       })
       .catch(console.error);
 
     return () => {
-      unlisten?.();
+      unlistenWake?.();
+      unlistenMac?.();
     };
   }, [refreshTailscale]);
 

@@ -20,6 +20,8 @@ pub struct DeviceProfile {
     pub tailscale_ip: Option<String>,
     pub mac_address: Option<String>,
     pub broadcast_ip: Option<String>,
+    #[serde(default)]
+    pub wol_relay_host: Option<String>,
     pub ssh_port: u16,
     pub video_port: u16,
     pub input_port: u16,
@@ -36,6 +38,7 @@ impl Default for DeviceProfile {
             tailscale_ip: None,
             mac_address: None,
             broadcast_ip: Some("255.255.255.255".to_string()),
+            wol_relay_host: None,
             ssh_port: 22,
             video_port: 9091,
             input_port: 9090,
@@ -79,6 +82,7 @@ impl DeviceProfile {
             mac_address: clean_opt(&self.mac_address).map(|m| m.to_uppercase()),
             broadcast_ip: clean_opt(&self.broadcast_ip)
                 .or_else(|| Some("255.255.255.255".to_string())),
+            wol_relay_host: clean_opt(&self.wol_relay_host),
             ssh_port: if self.ssh_port == 0 { 22 } else { self.ssh_port },
             video_port: if self.video_port == 0 { 9091 } else { self.video_port },
             input_port: if self.input_port == 0 { 9090 } else { self.input_port },
@@ -142,6 +146,7 @@ impl From<ServerProfile> for DeviceProfile {
             tailscale_ip,
             mac_address: None,
             broadcast_ip: Some("255.255.255.255".to_string()),
+            wol_relay_host: None,
             ssh_port: if profile.port == 0 { 22 } else { profile.port },
             video_port: 9091,
             input_port: 9090,

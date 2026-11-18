@@ -144,8 +144,49 @@ async fn wake_and_wait_device(
     res
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MacDetectedEvent {
+    pub device_id: String,
+    pub mac_address: String,
+}
+
+#[tauri::command]
+async fn detect_remote_mac(profile: DeviceProfile) -> Result<String, String> {
+    let clean = profile.sanitized();
+    let ts_status = get_tailscale_status_async().await.ok();
+    let candidates = resolve_connection_candidates(&clean, ts_status.as_ref());
+    if candidates.is_empty() {
+        return Err("Debes proporcionar una IP LAN o IP Tailscale".to_string());
+    }
+
+    let selected = pick_reachable_candidate(&candidates, clean.ssh_port, clean.video_port).await;
+    let mut target_profile = clean.clone();
+    target_profile.host = selected.host.clone();
+
+    let mut ssh = MolexVideoClient::from_device(target_profile);
+    if let Err(first_err) = ssh.connect_async().await {
+        if let Some(fallback) = candidates.iter().find(|c| c.host != selected.host) {
+            let mut fb_profile = clean.clone();
+            fb_profile.host = fallback.host.clone();
+            let fb_ssh = MolexVideoClient::from_device(fb_profile);
+            fb_ssh
+                .connect_async()
+                .await
+                .map_err(|_| first_err.to_string())?;
+            ssh = fb_ssh;
+        } else {
+            return Err(first_err.to_string());
+        }
+    }
+
+    let mac_res = ssh.detect_remote_mac_async().await;
+    ssh.disconnect_async().await;
+    mac_res.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn connect_device(
+    app: AppHandle,
     state: State<'_, AppState>,
     profile: DeviceProfile,
 ) -> Result<ConnectionSummary, String> {
@@ -222,12 +263,61 @@ async fn connect_device(
     if let Ok(mut guard) = state.active_host.lock() {
         *guard = Some(host.clone());
     }
+    let ssh_for_mac = ssh.clone();
     *state.ssh_client.lock().await = Some(ssh);
 
     // Iniciar pipeline de decodificación H.264 sobre TCP (puerto 9091 o configurado)
     state
         .video_pipeline
         .start_stream(host.clone(), clean.video_port, decoder_threads);
+
+    // Autodetección silenciosa de MAC Ethernet en segundo plano si aún no estaba guardada
+    if ssh_connected && clean.mac_address.is_none() && !clean.id.trim().is_empty() {
+        let device_id = clean.id.clone();
+        let app_handle = app.clone();
+        tokio::spawn(async move {
+            if let Ok(mac) = ssh_for_mac.detect_remote_mac_async().await {
+                let st = app_handle.state::<AppState>();
+                let mut updated_saved = false;
+                if let Ok(mut store) = st.store.lock() {
+                    if let Some(mut existing) = store
+                        .list_devices()
+                        .into_iter()
+                        .find(|d| d.id == device_id)
+                    {
+                        if existing
+                            .mac_address
+                            .as_deref()
+                            .map(str::trim)
+                            .unwrap_or("")
+                            .is_empty()
+                        {
+                            existing.mac_address = Some(mac.clone());
+                            if store.upsert_device(existing).is_ok() {
+                                updated_saved = true;
+                            }
+                        }
+                    }
+                }
+                if updated_saved {
+                    if let Ok(mut active_guard) = st.active_device.lock() {
+                        if let Some(ref mut dev) = *active_guard {
+                            if dev.id == device_id {
+                                dev.mac_address = Some(mac.clone());
+                            }
+                        }
+                    }
+                    let _ = app_handle.emit(
+                        "device-mac-detected",
+                        &MacDetectedEvent {
+                            device_id,
+                            mac_address: mac,
+                        },
+                    );
+                }
+            }
+        });
+    }
 
     Ok(ConnectionSummary {
         device: clean,
@@ -470,6 +560,7 @@ pub fn run() {
             toggle_tailscale,
             send_wol,
             wake_and_wait_device,
+            detect_remote_mac,
             connect_device,
             disconnect_device,
             get_monitors,

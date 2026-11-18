@@ -7,6 +7,7 @@ import type {
   DesktopMetrics,
   DesktopSettings,
   DeviceProfile,
+  MacDetectedEvent,
   MonitorInfo,
   StreamStats,
   TailscaleStatus,
@@ -31,8 +32,12 @@ export const molexApi = {
     invoke<void>("send_wol", { mac, broadcastIp: broadcastIp ?? null }),
   wakeAndWaitDevice: (profile: DeviceProfile) =>
     invoke<WakeResult>("wake_and_wait_device", { profile }),
+  detectRemoteMac: (profile: DeviceProfile) =>
+    invoke<string>("detect_remote_mac", { profile }),
   onWakeProgress: (handler: (progress: WakeProgress) => void): Promise<UnlistenFn> =>
     listen<WakeProgress>("wol-progress", (e) => handler(e.payload)),
+  onMacDetected: (handler: (ev: MacDetectedEvent) => void): Promise<UnlistenFn> =>
+    listen<MacDetectedEvent>("device-mac-detected", (e) => handler(e.payload)),
 
   connectDevice: (profile: DeviceProfile) =>
     invoke<ConnectionSummary>("connect_device", { profile }),

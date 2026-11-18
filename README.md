@@ -52,10 +52,52 @@ npm run tauri dev
 
 ### Build & Install Host Daemon (`molex_daemon`)
 ```bash
-cargo build --manifest-path molex_motor/Cargo.toml -p molex_daemon --release
-install -Dm755 molex_motor/target/release/molex_daemon ~/.local/bin/molex_daemon
+./scripts/install-host-daemon.sh
 ```
 See [scripts/README.md](scripts/README.md) for **Arch Linux (systemd)** and **Gentoo Linux (OpenRC)** boot/WoL/Wayland autostart setup.
+
+---
+
+## 🚀 Despliegue Rápido en una Laptop Nueva (Cliente y Host)
+
+### Modo Cliente (solo controlar tu workstation desde una laptop nueva)
+No necesitas instalar Node.js, npm ni Rust en la laptop cliente:
+
+1. **Instala y activa Tailscale VPN** según tu distribución:
+   - **Arch Linux:**
+     ```bash
+     sudo pacman -S tailscale webkit2gtk-4.1 ffmpeg
+     sudo systemctl enable --now tailscaled
+     sudo tailscale up --operator=$USER
+     ```
+   - **Gentoo Linux:**
+     ```bash
+     sudo emerge -av net-vpn/tailscale net-libs/webkit-gtk media-video/ffmpeg
+     sudo rc-update add tailscaled default && sudo rc-service tailscaled start
+     sudo tailscale up --operator=$USER
+     ```
+   - **Debian / Ubuntu:**
+     ```bash
+     curl -fsSL https://tailscale.com/install.sh | sh
+     sudo apt update && sudo apt install -y libwebkit2gtk-4.1-0 libavcodec-dev libavutil-dev libswscale-dev
+     sudo tailscale up --operator=$USER
+     ```
+2. **Ejecuta el binario portable o AppImage** compilado (`npm run tauri build`):
+   ```bash
+   chmod +x ./molex-desktop   # o ./Molex_*.AppImage
+   ./molex-desktop
+   ```
+3. **Importa el equipo:** En **Dispositivos**, busca tu workstation en **Nodos detectados en Tailnet**, pulsa **+ Guardar**, añade tu usuario/contraseña SSH (o usa llave SSH) y pulsa **Conectar** (la MAC Ethernet se autodetecta automáticamente en segundo plano o desde **Detectar MAC por SSH**).
+   - *Tip Wake-on-LAN desde fuera de la LAN:* Si vas a encender la workstation desde otra red, configura el campo **Relay WoL por SSH** con un nodo siempre encendido dentro de la LAN destino (ej. `pi@100.64.0.99`).
+
+### Modo Host (convertir la laptop en equipo controlable)
+```bash
+./scripts/install-host-daemon.sh
+# En Arch Linux:   ./scripts/setup-arch-host.sh
+# En Gentoo Linux: ./scripts/setup-gentoo-host.sh
+# En Debian/Ubuntu (solo cliente/host Wayland con wl-screenrec instalado):
+#   asegúrate de iniciar `molex-host-up` con tu sesión Wayland y tener `openssh-server` + `ethtool` activos.
+```
 
 ---
 

@@ -1,5 +1,7 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
+  AlertCircle,
+  BookOpen,
   Check,
   CheckCircle2,
   Copy,
@@ -11,12 +13,14 @@ import {
   Play,
   Plus,
   Power,
+  Radar,
   RefreshCw,
   Shield,
   Trash2,
   Wifi,
   X,
 } from "lucide-react";
+import { molexApi } from "../lib/tauriApi";
 import type {
   DeviceProfile,
   TailscalePeer,
@@ -47,12 +51,51 @@ const EMPTY_FORM: DeviceProfile = {
   tailscale_ip: null,
   mac_address: null,
   broadcast_ip: "255.255.255.255",
+  wol_relay_host: null,
   ssh_port: 22,
   video_port: 9091,
   input_port: 9090,
   username: "daniel",
   password: null,
 };
+
+function copyTextFallback(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    return navigator.clipboard.writeText(text).catch(() => {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    });
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
+  return Promise.resolve();
+}
+
+function getWakeStepIndex(wakeState: WakeProgress): number {
+  if (wakeState.stage === "ready") return 3;
+  if (
+    wakeState.stage === "waiting_for_network" ||
+    wakeState.stage === "vpn_online_waiting_daemon"
+  ) {
+    return 2;
+  }
+  if (wakeState.stage === "packet_sent") return 1;
+  return 0;
+}
 
 export const DevicesScreen: React.FC<DevicesScreenProps> = ({
   devices,
@@ -70,39 +113,66 @@ export const DevicesScreen: React.FC<DevicesScreenProps> = ({
   onWakeDevice,
 }) => {
   const [modalOpen, setModalOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [form, setForm] = useState<DeviceProfile>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DeviceProfile | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [copiedPermissionCmd, setCopiedPermissionCmd] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const [macPromptNotice, setMacPromptNotice] = useState<string | null>(null);
+  const [focusMacOnOpen, setFocusMacOnOpen] = useState(false);
+  const [detectingMac, setDetectingMac] = useState(false);
+  const [macDetectStatus, setMacDetectStatus] = useState<{
+    kind: "ok" | "err";
+    text: string;
+  } | null>(null);
+  const macInputRef = useRef<HTMLInputElement | null>(null);
 
   const TAILSCALE_OPERATOR_CMD = "sudo tailscale set --operator=$USER";
 
-  const copyTailscalePermissionCommand = async () => {
-    try {
-      await navigator.clipboard.writeText(TAILSCALE_OPERATOR_CMD);
-    } catch {
-      const textarea = document.createElement("textarea");
-      textarea.value = TAILSCALE_OPERATOR_CMD;
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.focus();
-      textarea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textarea);
+  useEffect(() => {
+    if (modalOpen && focusMacOnOpen) {
+      const id = window.setTimeout(() => {
+        macInputRef.current?.focus();
+        macInputRef.current?.select();
+      }, 60);
+      return () => clearTimeout(id);
     }
-    setCopiedPermissionCmd(true);
-    window.setTimeout(() => setCopiedPermissionCmd(false), 2000);
+  }, [modalOpen, focusMacOnOpen]);
+
+  const handleCopy = async (key: string, text: string) => {
+    await copyTextFallback(text);
+    setCopiedKey(key);
+    window.setTimeout(() => {
+      setCopiedKey((curr) => (curr === key ? null : curr));
+    }, 2000);
   };
 
   const openNewModal = () => {
     setForm({ ...EMPTY_FORM });
+    setMacPromptNotice(null);
+    setMacDetectStatus(null);
+    setFocusMacOnOpen(false);
     setModalOpen(true);
   };
 
-  const openEditModal = (device: DeviceProfile) => {
-    setForm({ ...device });
+  const openEditModal = (device: DeviceProfile, requireMac = false) => {
+    setForm({
+      ...EMPTY_FORM,
+      ...device,
+      wol_relay_host: device.wol_relay_host ?? null,
+    });
+    setMacDetectStatus(null);
+    if (requireMac) {
+      setMacPromptNotice(
+        "Configura o detecta la MAC Ethernet para habilitar el encendido remoto"
+      );
+      setFocusMacOnOpen(true);
+    } else {
+      setMacPromptNotice(null);
+      setFocusMacOnOpen(false);
+    }
     setModalOpen(true);
   };
 
@@ -114,7 +184,38 @@ export const DevicesScreen: React.FC<DevicesScreenProps> = ({
       host: ip,
       tailscale_ip: ip || null,
     });
+    setMacPromptNotice(null);
+    setMacDetectStatus(null);
+    setFocusMacOnOpen(false);
     setModalOpen(true);
+  };
+
+  const handleDetectMac = async () => {
+    if (!form.host.trim() && !form.tailscale_ip?.trim()) {
+      setMacDetectStatus({
+        kind: "err",
+        text: "Ingresa primero una IP LAN o IP Tailscale del equipo.",
+      });
+      return;
+    }
+    setDetectingMac(true);
+    setMacDetectStatus(null);
+    try {
+      const mac = await molexApi.detectRemoteMac(form);
+      setForm((prev) => ({ ...prev, mac_address: mac }));
+      setMacPromptNotice(null);
+      setMacDetectStatus({
+        kind: "ok",
+        text: `MAC detectada por SSH: ${mac}`,
+      });
+    } catch (err) {
+      setMacDetectStatus({
+        kind: "err",
+        text: String(err),
+      });
+    } finally {
+      setDetectingMac(false);
+    }
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -133,6 +234,10 @@ export const DevicesScreen: React.FC<DevicesScreenProps> = ({
 
   const handleWake = async (device: DeviceProfile) => {
     setActionError(null);
+    if (!device.mac_address || !device.mac_address.trim()) {
+      openEditModal(device, true);
+      return;
+    }
     try {
       await onWakeDevice(device);
     } catch (err) {
@@ -149,6 +254,27 @@ export const DevicesScreen: React.FC<DevicesScreenProps> = ({
     }
   };
 
+  const guideSteps = [
+    {
+      id: "step-1-ts",
+      title: "Paso 1 — Instalar y activar Tailscale VPN (sin root)",
+      desc: "En la laptop nueva, instala Tailscale y autoriza el operador para controlar la VPN desde Molex:",
+      cmd: `# Arch Linux: sudo pacman -S tailscale\n# Gentoo: sudo emerge -av net-vpn/tailscale\n# Debian/Ubuntu: curl -fsSL https://tailscale.com/install.sh | sh\nsudo systemctl enable --now tailscaled  # (en Gentoo: sudo rc-update add tailscaled default && sudo rc-service tailscaled start)\nsudo tailscale up --operator=$USER`,
+    },
+    {
+      id: "step-2-bin",
+      title: "Paso 2 — Ejecutar el binario portable (sin Node.js ni Rust)",
+      desc: "Copia el ejecutable compilado `molex-desktop` (o `.AppImage`) desde tu PC principal y ejecútalo directo:",
+      cmd: `chmod +x ./molex-desktop\n./molex-desktop`,
+    },
+    {
+      id: "step-3-conn",
+      title: "Paso 3 — Importar equipo desde Tailnet y conectar",
+      desc: "Abre la pestaña Dispositivos, ubica tu workstation en «Nodos detectados en Tailnet», pulsa «+ Guardar», introduce tu usuario/contraseña SSH (o llave ~/.ssh/id_ed25519) y pulsa «Conectar» (la MAC Ethernet para WoL se autodetectará al conectar).",
+      cmd: `# (Opcional) Si usarás llave SSH sin contraseña:\nssh-copy-id usuario@IP_TAILSCALE`,
+    },
+  ];
+
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-molex-bg p-6">
       <div className="mx-auto w-full max-w-6xl space-y-6">
@@ -159,18 +285,28 @@ export const DevicesScreen: React.FC<DevicesScreenProps> = ({
               Dispositivos y Red Mesh
             </h1>
             <p className="mt-1 text-sm text-molex-muted">
-              Gestiona tus equipos Wayland, despiértalos por Wake-on-LAN y conéctate vía LAN o
-              Tailscale.
+              Gestiona tus equipos Wayland, despiértalos por Wake-on-LAN y conéctate vía Tailscale
+              o LAN.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={openNewModal}
-            className="inline-flex items-center gap-2 rounded-lg bg-molex-accent px-4 py-2.5 text-sm font-semibold text-molex-bg shadow transition hover:bg-molex-light"
-          >
-            <Plus className="h-4 w-4" />
-            Agregar Equipo
-          </button>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => setGuideOpen(true)}
+              className="inline-flex items-center gap-2 rounded-lg border border-molex-variant bg-molex-surface px-3.5 py-2.5 text-sm font-medium text-molex-light transition hover:border-molex-accent hover:bg-molex-variant"
+            >
+              <BookOpen className="h-4 w-4 text-molex-accent" />
+              Nueva Laptop / Guía de Conexión
+            </button>
+            <button
+              type="button"
+              onClick={openNewModal}
+              className="inline-flex items-center gap-2 rounded-lg bg-molex-accent px-4 py-2.5 text-sm font-semibold text-molex-bg shadow transition hover:bg-molex-light"
+            >
+              <Plus className="h-4 w-4" />
+              Agregar Equipo
+            </button>
+          </div>
         </div>
 
         {actionError && (
@@ -262,10 +398,10 @@ export const DevicesScreen: React.FC<DevicesScreenProps> = ({
               </div>
               <button
                 type="button"
-                onClick={copyTailscalePermissionCommand}
+                onClick={() => handleCopy("ts-perm", TAILSCALE_OPERATOR_CMD)}
                 className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-red-400/30 bg-red-900/40 px-3 py-1.5 text-xs font-semibold text-red-100 transition hover:bg-red-800/60"
               >
-                {copiedPermissionCmd ? (
+                {copiedKey === "ts-perm" ? (
                   <>
                     <Check className="h-3.5 w-3.5 text-emerald-300" />
                     ¡Copiado!
@@ -373,9 +509,12 @@ export const DevicesScreen: React.FC<DevicesScreenProps> = ({
             <div className="grid gap-4 md:grid-cols-2">
               {devices.map((device) => {
                 const wakeState = wakingDevices[device.id];
-                const isWaking = Boolean(wakeState && wakeState.stage !== "ready" && wakeState.stage !== "timeout");
+                const isWaking = Boolean(
+                  wakeState && wakeState.stage !== "ready" && wakeState.stage !== "timeout"
+                );
                 const isConnecting = connectingDeviceId === device.id;
                 const isConnected = activeDeviceId === device.id;
+                const wakeStep = wakeState ? getWakeStepIndex(wakeState) : 0;
 
                 return (
                   <div
@@ -388,7 +527,7 @@ export const DevicesScreen: React.FC<DevicesScreenProps> = ({
                   >
                     <div>
                       <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-center gap-3 min-w-0">
+                        <div className="flex min-w-0 items-center gap-3">
                           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-molex-variant text-molex-light">
                             <Laptop className="h-5 w-5 text-molex-accent" />
                           </div>
@@ -412,7 +551,7 @@ export const DevicesScreen: React.FC<DevicesScreenProps> = ({
                         <div className="flex items-center gap-1">
                           <button
                             type="button"
-                            onClick={() => openEditModal(device)}
+                            onClick={() => openEditModal(device, false)}
                             title="Editar dispositivo"
                             className="rounded-lg p-1.5 text-molex-muted hover:bg-molex-variant hover:text-molex-text"
                           >
@@ -437,10 +576,20 @@ export const DevicesScreen: React.FC<DevicesScreenProps> = ({
                             TS: {device.tailscale_ip}
                           </span>
                         )}
-                        {device.mac_address && (
+                        {device.mac_address ? (
                           <span className="inline-flex items-center gap-1 rounded-md bg-molex-bg px-2.5 py-1 font-mono text-molex-muted">
                             <Wifi className="h-3 w-3 text-molex-accent" />
                             MAC: {device.mac_address}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded-md border border-amber-500/25 bg-amber-950/20 px-2.5 py-1 font-mono text-amber-200/80">
+                            <Wifi className="h-3 w-3 text-amber-400" />
+                            MAC pendiente
+                          </span>
+                        )}
+                        {device.wol_relay_host && (
+                          <span className="inline-flex items-center gap-1 rounded-md bg-molex-bg px-2.5 py-1 font-mono text-molex-muted">
+                            Relay: {device.wol_relay_host}
                           </span>
                         )}
                         <span className="inline-flex items-center gap-1 rounded-md bg-molex-bg px-2.5 py-1 font-mono text-molex-muted">
@@ -449,17 +598,63 @@ export const DevicesScreen: React.FC<DevicesScreenProps> = ({
                         </span>
                       </div>
 
-                      {/* Wake-on-LAN live progress banner */}
+                      {/* Wake-on-LAN live 3-stage progress */}
                       {wakeState && (
-                        <div className="mt-3 rounded-lg border border-molex-accent/40 bg-molex-bg/80 p-3">
+                        <div className="mt-3 rounded-lg border border-amber-500/35 bg-molex-bg/90 p-3">
                           <div className="flex items-center gap-2 text-xs font-medium text-molex-light">
                             {isWaking ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin text-molex-accent" />
+                              <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-400" />
+                            ) : wakeState.stage === "timeout" ? (
+                              <AlertCircle className="h-3.5 w-3.5 text-red-400" />
                             ) : (
                               <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
                             )}
                             <span>{wakeState.message}</span>
                           </div>
+
+                          {/* 3-step visual progress bar */}
+                          <div className="mt-2.5 grid grid-cols-3 gap-1.5">
+                            <div
+                              className={`h-1.5 rounded-full transition-colors ${
+                                wakeStep >= 1 ? "bg-amber-400" : "bg-molex-variant"
+                              }`}
+                            />
+                            <div
+                              className={`h-1.5 rounded-full transition-colors ${
+                                wakeStep >= 2 ? "bg-amber-400" : "bg-molex-variant"
+                              }`}
+                            />
+                            <div
+                              className={`h-1.5 rounded-full transition-colors ${
+                                wakeStep >= 3 ? "bg-emerald-400" : "bg-molex-variant"
+                              }`}
+                            />
+                          </div>
+
+                          <div className="mt-2 space-y-0.5 text-[11px]">
+                            <p
+                              className={
+                                wakeStep >= 1 ? "text-amber-200" : "text-molex-muted"
+                              }
+                            >
+                              1. Enviando Magic Packet WoL...
+                            </p>
+                            <p
+                              className={
+                                wakeStep >= 2 ? "text-amber-200" : "text-molex-muted"
+                              }
+                            >
+                              2. Esperando arranque del sistema y red Tailscale...
+                            </p>
+                            <p
+                              className={
+                                wakeStep >= 3 ? "text-emerald-300 font-medium" : "text-molex-muted"
+                              }
+                            >
+                              3. Host en línea — conectando automáticamente...
+                            </p>
+                          </div>
+
                           <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-mono">
                             <span
                               className={`rounded px-1.5 py-0.5 ${
@@ -497,24 +692,24 @@ export const DevicesScreen: React.FC<DevicesScreenProps> = ({
                     <div className="mt-5 flex items-center gap-2.5 border-t border-molex-variant pt-4">
                       <button
                         type="button"
-                        disabled={!device.mac_address || isWaking}
+                        disabled={isWaking}
                         onClick={() => handleWake(device)}
                         title={
                           device.mac_address
                             ? "Enviar Magic Packet Wake-on-LAN y esperar VPN"
-                            : "Configura una MAC Address para usar Wake-on-LAN"
+                            : "Configura o detecta la MAC Ethernet para habilitar el encendido remoto"
                         }
-                        className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-molex-variant bg-molex-bg px-3 py-2 text-xs font-semibold text-molex-light transition hover:border-molex-accent hover:bg-molex-variant disabled:cursor-not-allowed disabled:opacity-40"
+                        className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/15 px-3 py-2 text-xs font-semibold text-amber-200 transition hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {isWaking ? (
                           <>
-                            <Loader2 className="h-3.5 w-3.5 animate-spin text-molex-accent" />
-                            Despertando...
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300" />
+                            Encendiendo...
                           </>
                         ) : (
                           <>
-                            <Power className="h-3.5 w-3.5 text-molex-accent" />
-                            Encender (WoL)
+                            <Power className="h-3.5 w-3.5 text-amber-300" />
+                            Encender PC
                           </>
                         )}
                       </button>
@@ -549,7 +744,7 @@ export const DevicesScreen: React.FC<DevicesScreenProps> = ({
       {/* Add / Edit Device Modal */}
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-xl rounded-2xl border border-molex-variant bg-molex-surface p-6 shadow-2xl">
+          <div className="max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-molex-variant bg-molex-surface p-6 shadow-2xl">
             <div className="flex items-center justify-between border-b border-molex-variant pb-3">
               <h2 className="text-lg font-bold text-molex-text">
                 {form.id ? "Editar Dispositivo" : "Nuevo Equipo Remoto Wayland"}
@@ -562,6 +757,13 @@ export const DevicesScreen: React.FC<DevicesScreenProps> = ({
                 <X className="h-5 w-5" />
               </button>
             </div>
+
+            {macPromptNotice && (
+              <div className="mt-4 flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-950/30 px-3.5 py-2.5 text-xs text-amber-200">
+                <AlertCircle className="h-4 w-4 shrink-0 text-amber-400" />
+                <span>{macPromptNotice}</span>
+              </div>
+            )}
 
             <form onSubmit={handleSave} className="mt-4 space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
@@ -607,21 +809,6 @@ export const DevicesScreen: React.FC<DevicesScreenProps> = ({
                 </label>
 
                 <label className="block space-y-1">
-                  <span className="text-xs font-medium text-molex-muted">
-                    MAC Address (Wake-on-LAN)
-                  </span>
-                  <input
-                    type="text"
-                    placeholder="AA:BB:CC:DD:EE:FF"
-                    value={form.mac_address ?? ""}
-                    onChange={(e) =>
-                      setForm({ ...form, mac_address: e.target.value || null })
-                    }
-                    className="w-full rounded-lg border border-molex-variant bg-molex-bg px-3 py-2 font-mono text-sm text-molex-text focus:border-molex-accent focus:outline-none"
-                  />
-                </label>
-
-                <label className="block space-y-1">
                   <span className="text-xs font-medium text-molex-muted">Usuario SSH</span>
                   <input
                     type="text"
@@ -633,7 +820,7 @@ export const DevicesScreen: React.FC<DevicesScreenProps> = ({
                   />
                 </label>
 
-                <label className="block space-y-1">
+                <label className="block space-y-1 sm:col-span-2">
                   <span className="text-xs font-medium text-molex-muted">
                     Contraseña SSH (opcional si usas llave)
                   </span>
@@ -646,6 +833,68 @@ export const DevicesScreen: React.FC<DevicesScreenProps> = ({
                   />
                 </label>
               </div>
+
+              {/* MAC Address + SSH Auto-detect button */}
+              <div className="space-y-1.5">
+                <span className="block text-xs font-medium text-molex-muted">
+                  Dirección MAC Ethernet (Wake-on-LAN)
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    ref={macInputRef}
+                    type="text"
+                    placeholder="AA:BB:CC:DD:EE:FF"
+                    value={form.mac_address ?? ""}
+                    onChange={(e) =>
+                      setForm({ ...form, mac_address: e.target.value || null })
+                    }
+                    className="min-w-[200px] flex-1 rounded-lg border border-molex-variant bg-molex-bg px-3 py-2 font-mono text-sm text-molex-text focus:border-molex-accent focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    disabled={detectingMac}
+                    onClick={handleDetectMac}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-molex-accent/50 bg-molex-variant px-3 py-2 text-xs font-semibold text-molex-light transition hover:bg-molex-accent hover:text-molex-bg disabled:opacity-50"
+                  >
+                    {detectingMac ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        Detectando...
+                      </>
+                    ) : (
+                      <>
+                        <Radar className="h-3.5 w-3.5" />
+                        Detectar MAC por SSH
+                      </>
+                    )}
+                  </button>
+                </div>
+                {macDetectStatus && (
+                  <p
+                    className={`text-xs ${
+                      macDetectStatus.kind === "ok" ? "text-emerald-300" : "text-red-300"
+                    }`}
+                  >
+                    {macDetectStatus.text}
+                  </p>
+                )}
+              </div>
+
+              {/* Optional Relay Host for External WoL */}
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-molex-muted">
+                  Relay WoL por SSH (opcional — nodo siempre encendido en la LAN del equipo)
+                </span>
+                <input
+                  type="text"
+                  placeholder="pi@100.64.0.99 o 100.x.y.z (para encender desde redes externas)"
+                  value={form.wol_relay_host ?? ""}
+                  onChange={(e) =>
+                    setForm({ ...form, wol_relay_host: e.target.value || null })
+                  }
+                  className="w-full rounded-lg border border-molex-variant bg-molex-bg px-3 py-2 font-mono text-xs text-molex-text focus:border-molex-accent focus:outline-none"
+                />
+              </label>
 
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <label className="block space-y-1">
@@ -717,6 +966,78 @@ export const DevicesScreen: React.FC<DevicesScreenProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* New Laptop Connection Guide Modal */}
+      {guideOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-molex-variant bg-molex-surface p-6 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-molex-variant pb-3">
+              <div className="flex items-center gap-2.5">
+                <BookOpen className="h-5 w-5 text-molex-accent" />
+                <h2 className="text-lg font-bold text-molex-text">
+                  Conectar desde una Laptop Nueva
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setGuideOpen(false)}
+                className="rounded-lg p-1 text-molex-muted hover:bg-molex-variant hover:text-molex-text"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <p className="mt-3 text-xs text-molex-muted">
+              Sigue estos 3 pasos para conectarte a tu workstation desde cualquier laptop Linux nueva
+              sin instalar Node.js ni compilar el frontend en ese equipo.
+            </p>
+
+            <div className="mt-4 space-y-4">
+              {guideSteps.map((step) => (
+                <div
+                  key={step.id}
+                  className="rounded-xl border border-molex-variant bg-molex-bg/70 p-4"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold text-molex-light">{step.title}</h3>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(step.id, step.cmd)}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-molex-variant bg-molex-surface px-2.5 py-1 text-xs font-medium text-molex-light hover:border-molex-accent"
+                    >
+                      {copiedKey === step.id ? (
+                        <>
+                          <Check className="h-3.5 w-3.5 text-emerald-400" />
+                          Copiado
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3.5 w-3.5 text-molex-accent" />
+                          Copiar
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <p className="mt-1 text-xs text-molex-muted">{step.desc}</p>
+                  <pre className="mt-2.5 overflow-x-auto rounded-lg border border-molex-variant/70 bg-black/50 p-3 font-mono text-[11px] leading-relaxed text-zinc-200">
+                    {step.cmd}
+                  </pre>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-5 flex justify-end border-t border-molex-variant pt-4">
+              <button
+                type="button"
+                onClick={() => setGuideOpen(false)}
+                className="rounded-lg bg-molex-accent px-5 py-2 text-sm font-semibold text-molex-bg hover:bg-molex-light"
+              >
+                Entendido
+              </button>
+            </div>
           </div>
         </div>
       )}
